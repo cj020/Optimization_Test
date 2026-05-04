@@ -23,7 +23,7 @@ def start_ui(volume, spacing, origin, dwell_positions):
 
     voxel_points = [
     world_to_voxel(p, origin, spacing)
-    for p in dwell_positions]
+    for p in dwell_positions] # the dwell positions converted to voxel coordinates (z, y, x)
 
     # update function
     def update(val): 
@@ -31,7 +31,7 @@ def start_ui(volume, spacing, origin, dwell_positions):
         img.set_data(volume[z]) 
         img.set_clim(vmin, vmax)
 
-        ax.clear()
+        ax.clear() # clear previous plot
         ax.imshow(volume[z], cmap="gray", vmin=vmin, vmax=vmax)
 
         # plot dwell points in this slice
@@ -42,7 +42,7 @@ def start_ui(volume, spacing, origin, dwell_positions):
         z_mm = origin[2] + z * spacing[2]
         ax.set_title(f"Slice {z} | z = {z_mm:.2f} mm")
 
-        fig.canvas.draw_idle()
+        fig.canvas.draw_idle() # redraw the figure
     
     slider.on_changed(update) 
 

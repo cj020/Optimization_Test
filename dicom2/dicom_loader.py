@@ -64,9 +64,9 @@ def load_ct(folder):
     return volume, spacing, origin, direction, rtplan
 
 def extract_dwell_positions(rtplan):
-    dwell_positions = []
+    dwell_positions = [] # here the dwell positions will be stored as (x, y, z) in mm (world coordinates)
     
-    count = 0
+    count = 0 # counter for dwell positions
 
     if rtplan is None:
         print("No RTPLAN available")
