@@ -3,7 +3,7 @@ import pydicom
 import SimpleITK as sitk
 
 def load_ct(folder):
-    for f in os.listdir(folder): 
+    for f in os.listdir(folder): # os.listdir() returns a list of all files in the folder.
         path = os.path.join(folder, f) 
         try:
             ds = pydicom.dcmread(path, stop_before_pixels=True) 
