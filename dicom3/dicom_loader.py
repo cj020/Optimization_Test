@@ -2,7 +2,7 @@ import os
 import pydicom
 import SimpleITK as sitk
 
-folder = r"C:\Users\jichen\Downloads\T00060\T00060"
+# folder = r"C:\Users\jichen\Downloads\T00060\T00060"
 
 def load_dicom(folder, skip_keywords=None):
     """
@@ -94,11 +94,11 @@ def load_dicom(folder, skip_keywords=None):
 
     image = reader.Execute()
 
-    volume = sitk.GetArrayFromImage(image)
+    volume = sitk.GetArrayFromImage(image) # (nz, ny, nx)
 
-    spacing = image.GetSpacing()
-    origin = image.GetOrigin()
-    direction = image.GetDirection()
+    spacing = image.GetSpacing() # (dx, dy, dz) in mm
+    origin = image.GetOrigin() # (x0, y0, z0), the physical (world/patient) coordinate of the first voxel in the CT volume.
+    direction = image.GetDirection() 
 
     print("CT shape:", volume.shape)
     print("Spacing:", spacing)
@@ -126,10 +126,22 @@ def load_dicom(folder, skip_keywords=None):
     rtdose = None
     if rtdose_path:
         print("📌 Loading RTDOSE")
-        ds = pydicom.dcmread(rtdose_path)
-        rtdose = ds.pixel_array * ds.DoseGridScaling
+        dose_ds = pydicom.dcmread(rtdose_path)
+        rtdose = dose_ds.pixel_array * dose_ds.DoseGridScaling
 
-        print("Dose shape:", rtdose.shape)
+        print("Dose shape:", rtdose.shape) # (nz, ny, nx)
+        
+        # rtdose is a 3D array with dimensions (z, y, x) corresponding to the dose grid. The spacing and origin of the dose grid can be obtained from the DICOM tags as follows:
+        dy, dx = dose_ds.PixelSpacing
+        z_offsets = dose_ds.GridFrameOffsetVector
+        dz = z_offsets[1] - z_offsets[0]
+        dose_spacing = (dz, dy, dx)  # note the order (dz, dy, dx)
+        
+        print("Dose spacing:", dose_spacing)
+
+        dose_origin = dose_ds.ImagePositionPatient # (x0, y0, z0), the physical (world/patient) coordinate of the first voxel in the dose grid
+
+        print("Dose origin:", dose_origin)
 
     return volume, spacing, origin, direction, rtstruct, rtplan, rtdose
 
@@ -148,7 +160,7 @@ def extract_dwell_positions(rtplan):
                 for cp in channel.BrachyControlPointSequence:
 
                     if hasattr(cp, "ControlPoint3DPosition"): # hasattr check to avoid missing attribute
-                        pos = cp.ControlPoint3DPosition  # (x, y, z)
+                        pos = cp.ControlPoint3DPosition  # (x, y, z) in mm, in the patient coordinate system (world coordinates)
                         dwell_positions.append(pos)
 
                         print(f"Dwell {count}: x={pos[0]:.2f}, y={pos[1]:.2f}, z={pos[2]:.2f}")
