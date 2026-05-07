@@ -145,14 +145,20 @@ def load_dicom(folder, skip_keywords=None):
 
     return volume, spacing, origin, direction, rtstruct, rtplan, rtdose
 
-def extract_dwell_positions(rtplan):
-    dwell_positions = [] # here the dwell positions will be stored as (x, y, z) in mm (world coordinates)
+def extract_dwell_points(rtplan): # the old extract_dwell_points function, without extracting the dwell time
     
+    dwell_positions = []  # list to store dwell positions (x, y, z)
+    channel_numbers = []  # list to store corresponding channel numbers
+    channel_total_times = [] # list to store total time of each channel
+    control_point_indices = []  # list to store corresponding control point indices
+    control_point_times = [] # list to store corresponding control point times weighted
     count = 0 # counter for dwell positions
+
+    print("\nDwell points with repeat:\n")
 
     if rtplan is None:
         print("No RTPLAN available")
-        return dwell_positions, count
+        return dwell_positions, count, channel_numbers, channel_total_times, control_point_indices, control_point_times
 
     try:
         for app in rtplan.ApplicationSetupSequence:
@@ -161,13 +167,86 @@ def extract_dwell_positions(rtplan):
 
                     if hasattr(cp, "ControlPoint3DPosition"): # hasattr check to avoid missing attribute
                         pos = cp.ControlPoint3DPosition  # (x, y, z) in mm, in the patient coordinate system (world coordinates)
+                        
                         dwell_positions.append(pos)
-
-                        print(f"Dwell {count}: x={pos[0]:.2f}, y={pos[1]:.2f}, z={pos[2]:.2f}")
+                        channel_numbers.append(channel.ChannelNumber)
+                        control_point_indices.append(cp.ControlPointIndex)
+                        channel_total_times.append(channel.ChannelTotalTime) 
+                        
+                        # time weight (if exists)
+                        time = getattr(cp, "CumulativeTimeWeight", None)
+                        control_point_times.append(time)
+                        
+                        print(f"Dwell {count}: x={pos[0]:.2f}, y={pos[1]:.2f}, z={pos[2]:.2f}, Channel={channel.ChannelNumber}, ChannelTotalTime={channel.ChannelTotalTime}, ControlPoint={cp.ControlPointIndex}, TimeWeight={time}")
                         count += 1
 
     except Exception as e:
         print("Error reading RTPLAN:", e)
 
-    print(f"\nTotal dwell positions: {count}")
-    return dwell_positions, count
+        print(f"\nTotal dwell positions: {count}")
+    return dwell_positions, count, channel_numbers, channel_total_times,control_point_indices, control_point_times
+
+def extract_dwell_points_with_dwell_time(rtplan): # extract dwell positions along with their corresponding dwell times calculated from the cumulative time weights and channel total time.
+
+    dwells = []
+    count = 0
+
+    print("\nDwell points without repeat:\n")
+
+    if rtplan is None:
+        print("No RTPLAN available")
+        return dwells, count
+
+    try:
+        for app in rtplan.ApplicationSetupSequence:
+
+            for channel in app.ChannelSequence:
+
+                cps = channel.BrachyControlPointSequence
+
+                # IMPORTANT: process in pairs
+                for i in range(0, len(cps) - 1, 2):
+
+                    cp_start = cps[i]
+                    cp_end = cps[i + 1]
+
+                    if not hasattr(cp_start, "ControlPoint3DPosition"):
+                        continue
+
+                    # --- position (world coordinates)
+                    pos = cp_start.ControlPoint3DPosition
+
+                    # --- time weight difference
+                    w1 = getattr(cp_start, "CumulativeTimeWeight", None)
+                    w2 = getattr(cp_end, "CumulativeTimeWeight", None)
+
+                    if w1 is None or w2 is None:
+                        dwell_time = None
+                    else:
+                        weight = w2 - w1
+                        channel_time = getattr(channel, "ChannelTotalTime", 1.0)
+                        dwell_time = weight * channel_time
+
+                    # --- store one true dwell
+                    dwells.append([
+                        count,
+                        channel.ChannelNumber,
+                        dwell_time,
+                        pos
+                    ])
+
+                    print(
+                        f"Dwell {count}: "
+                        f"Channel={channel.ChannelNumber}, "
+                        f"Time={dwell_time}, "
+                        f"Pos=({pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f})"
+                    )
+
+                    count += 1
+
+    except Exception as e:
+        print("Error reading RTPLAN:", e)
+
+    print(f"\nTotal dwell points: {count}")
+
+    return dwells, count
