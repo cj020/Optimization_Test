@@ -258,12 +258,11 @@ def extract_dwell_points_with_dwell_time_and_local_direction(rtplan): # extract 
                     local_direction_vec_norm = np.linalg.norm(cp_local_direction_vec)
 
                     if local_direction_vec_norm > 0:
-                        cp_local_direction = (
+                        norm_cp_local_direction = (
                             cp_local_direction_vec / local_direction_vec_norm
-                    )
-                    
+                        )
                     else:
-                        cp_local_direction = np.array([0.0, 0.0, 0.0])
+                        norm_cp_local_direction = np.array([0.0, 0.0, 0.0])
                     
                     # --- store one true dwell
                     dwells.append([
@@ -271,7 +270,7 @@ def extract_dwell_points_with_dwell_time_and_local_direction(rtplan): # extract 
                         channel.ChannelNumber,
                         dwell_time,
                         pos, 
-                        cp_local_direction
+                        norm_cp_local_direction
                     ])
 
                     print(
@@ -279,7 +278,7 @@ def extract_dwell_points_with_dwell_time_and_local_direction(rtplan): # extract 
                         f"Channel={channel.ChannelNumber}, "
                         f"Time={dwell_time}, "
                         f"Pos=({pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f}), "
-                        f"LocalDirection=({cp_local_direction[0]:.2f}, {cp_local_direction[1]:.2f}, {cp_local_direction[2]:.2f})"
+                        f"LocalDirection=({norm_cp_local_direction[0]:.2f}, {norm_cp_local_direction[1]:.2f}, {norm_cp_local_direction[2]:.2f})"
                     )
 
                     count += 1
