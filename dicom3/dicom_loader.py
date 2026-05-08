@@ -1,6 +1,7 @@
 import os
 import pydicom
 import SimpleITK as sitk
+import numpy as np
 
 # folder = r"C:\Users\jichen\Downloads\T00060\T00060"
 
@@ -162,7 +163,7 @@ def extract_dwell_points(rtplan): # the old extract_dwell_points function, witho
 
     try:
         for app in rtplan.ApplicationSetupSequence:
-            for channel in app.ChannelSequence:
+            for channel in app.ChannelSequence: # A channel = catheter path.
                 for cp in channel.BrachyControlPointSequence:
 
                     if hasattr(cp, "ControlPoint3DPosition"): # hasattr check to avoid missing attribute
@@ -186,7 +187,7 @@ def extract_dwell_points(rtplan): # the old extract_dwell_points function, witho
         print(f"\nTotal dwell positions: {count}")
     return dwell_positions, count, channel_numbers, channel_total_times,control_point_indices, control_point_times
 
-def extract_dwell_points_with_dwell_time(rtplan): # extract dwell positions along with their corresponding dwell times calculated from the cumulative time weights and channel total time.
+def extract_dwell_points_with_dwell_time_and_local_direction(rtplan): # extract dwell positions along with their corresponding dwell times calculated from the cumulative time weights and channel total time, an the local direction.
 
     dwells = []
     count = 0
@@ -200,7 +201,7 @@ def extract_dwell_points_with_dwell_time(rtplan): # extract dwell positions alon
     try:
         for app in rtplan.ApplicationSetupSequence:
 
-            for channel in app.ChannelSequence:
+            for channel in app.ChannelSequence: # A channel = catheter path.
 
                 cps = channel.BrachyControlPointSequence
 
@@ -214,7 +215,7 @@ def extract_dwell_points_with_dwell_time(rtplan): # extract dwell positions alon
                         continue
 
                     # --- position (world coordinates)
-                    pos = cp_start.ControlPoint3DPosition
+                    pos = np.array(cp_start.ControlPoint3DPosition, dtype=float)
 
                     # --- time weight difference
                     w1 = getattr(cp_start, "CumulativeTimeWeight", None)
@@ -224,22 +225,61 @@ def extract_dwell_points_with_dwell_time(rtplan): # extract dwell positions alon
                         dwell_time = None
                     else:
                         weight = w2 - w1
-                        channel_time = getattr(channel, "ChannelTotalTime", 1.0)
+                        channel_time = float(getattr(channel, "ChannelTotalTime", 1.0))
                         dwell_time = weight * channel_time
 
+                    # --- local direction
+
+                    # first dwell
+                    if i == 0:
+
+                        p0 = np.array(cps[i].ControlPoint3DPosition, dtype=float)
+                        p1 = np.array(cps[i + 2].ControlPoint3DPosition, dtype=float)
+
+                        cp_local_direction_vec = p1 - p0
+
+                    # last dwell
+                    elif i >= len(cps) - 2:
+
+                        p0 = np.array(cps[i - 2].ControlPoint3DPosition, dtype=float)
+                        p1 = np.array(cps[i].ControlPoint3DPosition, dtype=float)
+
+                        cp_local_direction_vec = p1 - p0
+
+                    # interior dwell
+                    else:
+
+                        p0 = np.array(cps[i - 2].ControlPoint3DPosition, dtype=float)
+                        p1 = np.array(cps[i + 2].ControlPoint3DPosition, dtype=float)
+
+                        cp_local_direction_vec = p1 - p0
+
+
+                    local_direction_vec_norm = np.linalg.norm(cp_local_direction_vec)
+
+                    if local_direction_vec_norm > 0:
+                        cp_local_direction = (
+                            cp_local_direction_vec / local_direction_vec_norm
+                    )
+                    
+                    else:
+                        cp_local_direction = np.array([0.0, 0.0, 0.0])
+                    
                     # --- store one true dwell
                     dwells.append([
                         count,
                         channel.ChannelNumber,
                         dwell_time,
-                        pos
+                        pos, 
+                        cp_local_direction
                     ])
 
                     print(
                         f"Dwell {count}: "
                         f"Channel={channel.ChannelNumber}, "
                         f"Time={dwell_time}, "
-                        f"Pos=({pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f})"
+                        f"Pos=({pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f}), "
+                        f"LocalDirection=({cp_local_direction[0]:.2f}, {cp_local_direction[1]:.2f}, {cp_local_direction[2]:.2f})"
                     )
 
                     count += 1

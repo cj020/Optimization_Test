@@ -1,7 +1,7 @@
 import matplotlib
 matplotlib.use('TkAgg')
 
-from dicom_loader import load_dicom, extract_dwell_points, extract_dwell_points_with_dwell_time
+from dicom_loader import load_dicom, extract_dwell_points, extract_dwell_points_with_dwell_time_and_local_direction
 from ui import start_ui
 import dose_contribution as dc
 import numpy as np
@@ -16,7 +16,7 @@ def main():
 
     extract_dwell_points(rtplan) # old function that prints dwell points with repeats, for comparison
 
-    dwells, count = extract_dwell_points_with_dwell_time(rtplan) # new function that prints dwell points without repeats
+    dwells, count = extract_dwell_points_with_dwell_time_and_local_direction(rtplan) # new function that prints dwell points without repeats
     print(f"Extracted {count} dwell positions:")
     
     dwell_positions = np.array([d[3] for d in dwells]) # extract the dwell positions (x, y, z) from the dwells list
