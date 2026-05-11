@@ -16,7 +16,7 @@ def main():
 
     extract_dwell_points(rtplan) # old function that prints dwell points with repeats, for comparison
 
-    dwells, count = extract_dwell_points_with_dwell_time_and_local_direction(rtplan) # new function that prints dwell points without repeats
+    dwells, count = extract_dwell_points_with_dwell_time_and_local_direction(rtplan = rtplan, local_directions = False) # new function that prints dwell points without repeats
     print(f"Extracted {count} dwell positions:")
     
     dwell_positions = np.array([d[3] for d in dwells]) # extract the dwell positions (x, y, z) from the dwells list
