@@ -167,7 +167,7 @@ def extract_dwell_points(rtplan): # the old extract_dwell_points function, witho
                 for cp in channel.BrachyControlPointSequence:
 
                     if hasattr(cp, "ControlPoint3DPosition"): # hasattr check to avoid missing attribute
-                        pos = cp.ControlPoint3DPosition  # (x, y, z) in mm, in the patient coordinate system (world coordinates)
+                        pos = cp.ControlPoint3DPosition  # ControlPoint3DPosition returns: (x, y, z) in mm, in the patient coordinate system (world coordinates)
                         
                         dwell_positions.append(pos)
                         channel_numbers.append(channel.ChannelNumber)
@@ -294,7 +294,7 @@ def extract_dwell_points_with_dwell_time_and_local_direction(rtplan, local_direc
                         f"Channel={channel.ChannelNumber}, "
                         f"Time={dwell_time}, "
                         f"Pos=({pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f}), "
-                        f"LocalDirection=({norm_cp_direction[0]:.2f}, {norm_cp_direction[1]:.2f}, {norm_cp_direction[2]:.2f})"
+                        f"Direction=({norm_cp_direction[0]:.2f}, {norm_cp_direction[1]:.2f}, {norm_cp_direction[2]:.2f})"
                     )
 
                     count += 1

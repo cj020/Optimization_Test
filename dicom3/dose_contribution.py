@@ -66,3 +66,19 @@ def dose_contribution(dwell_pos, norm_dwell_dir, dwell_count, rtdose, volume, sp
         angle_to_voxel[i] = angle
 
     return distance, cos_dir_to_voxel, angle_to_voxel
+
+def beta(dwell_pos, voxel_pos, L, direction): 
+    """
+    Calculate the beta angle for a given position and voxel.
+
+    Parameters:
+    pos (tuple): The position of the dwell point in world coordinates (x, y, z).
+    voxel (tuple): The voxel coordinates (z, y, x).
+    L (float): The length of the source.
+    direction (tuple): The direction vector of the catheter.
+
+    Returns:
+    float: The beta angle for the given position and voxel.
+    """
+    
+    
