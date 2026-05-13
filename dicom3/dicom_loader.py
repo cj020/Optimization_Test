@@ -215,7 +215,7 @@ def extract_dwell_points_with_dwell_time_and_local_direction(rtplan, local_direc
                         continue
 
                     # --- position (world coordinates)
-                    pos = np.array(cp_start.ControlPoint3DPosition, dtype=float)
+                    pos = np.array(cp_start.ControlPoint3DPosition, dtype=float) # (x, y, z) in mm, in the patient coordinate system (world coordinates)
 
                     # --- time weight difference
                     w1 = getattr(cp_start, "CumulativeTimeWeight", None)
