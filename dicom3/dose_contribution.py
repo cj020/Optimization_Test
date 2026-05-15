@@ -66,6 +66,7 @@ F_interp = RegularGridInterpolator(
     fill_value=None
 )
 
+
 def voxel_coordinates(volume, spacing, origin):
     """Calculate the coordinates of the center of each voxel in the volume."""
     
@@ -230,7 +231,7 @@ def G_L(r, L, beta, theta):
 
     return G
 
-def TG43_dose_rate_single_dwell_to_single_voxel(S_k, Lambda, r, theta, beta, g_r, F_r_theta, G_fun, L):
+def TG43_dose_rate_single_dwell_to_single_voxel(S_k, Lambda, r, theta, beta, G_fun, L):
     """Calculate the 2D TG43 dose rate for a given air kerma strength, dose-rate constant, distance, radial dose function, anisotropy function, and geometry function."""
     # S_k: air kerma strength in cGy*cm^2/h
     # Lambda: dose-rate constant in cGy/h/U, where U is the unit of air kerma strength (cGy*cm^2/h)
@@ -245,11 +246,12 @@ def TG43_dose_rate_single_dwell_to_single_voxel(S_k, Lambda, r, theta, beta, g_r
     r_cm = r / 10.0 # convert distance from mm to cm
     theta_deg = np.degrees(theta) # convert angle from radians to degrees
 
-    dose_rate = S_k * Lambda * G_fun(r, L, beta, theta)/G_L_0 * g_r(r_cm) * F_r_theta(r_cm, theta_deg) 
+    dose_rate = S_k * Lambda * G_fun(r, L, beta, theta)/G_L_0 * g_interp(r_cm) * F_interp((r_cm, theta_deg)) 
 
     return dose_rate
 
-def TG43_dose_rate_single_dwell_to_all_voxels(voxel_z, voxel_y, voxel_x, S_k, Lambda, distance, angle_to_voxel, beta, g_r, F_r_theta, G_fun, L):
+
+def TG43_dose_rate_single_dwell_to_all_voxels(voxel_z, voxel_y, voxel_x, S_k, Lambda, distance, angle_to_voxel, beta, G_fun, L):
     """Calculate the 2D TG43 dose rate from a single dwell position to all voxels in the volume grid."""
     # S_k: air kerma strength in cGy*cm^2/h
     # Lambda: dose-rate constant in cGy/h/U, where U is the unit of air kerma strength (cGy*cm^2/h)
@@ -273,8 +275,8 @@ def TG43_dose_rate_single_dwell_to_all_voxels(voxel_z, voxel_y, voxel_x, S_k, La
                 r = distance[k,j,i]
                 theta = angle_to_voxel[k,j,i]
                 beta_angle = beta[k,j,i]
-                dose_rate_single_dwell[k,j,i] = TG43_dose_rate_single_dwell_to_single_voxel(S_k, Lambda, r, theta, beta_angle, g_r, F_r_theta, G_fun, L)    
-    
+                dose_rate_single_dwell[k,j,i] = TG43_dose_rate_single_dwell_to_single_voxel(S_k=S_k, Lambda=Lambda, r=r, theta=theta, beta=beta_angle, G_fun=G_fun, L=L)
+
     return dose_rate_single_dwell
 
 def dose_contribution(dwell_pos, norm_dwell_dir, dwell_count, volume, spacing, origin, L, S_k, Lambda):
@@ -299,7 +301,7 @@ def dose_contribution(dwell_pos, norm_dwell_dir, dwell_count, volume, spacing, o
         cos_dir, angle = direction_to_all(dwell_pos[i], norm_dwell_dir[i], voxel_z, voxel_y, voxel_x)
         cos_dir_to_voxel[i] = cos_dir
         angle_to_voxel[i] = angle
-        beta_value[i] = beta_to_all(dwell_pos[i], voxel_z, voxel_y, voxel_x, L, norm_dwell_dir[i], cos_dir)
-        dose_rate[i] = TG43_dose_rate_single_dwell_to_all_voxels(voxel_z, voxel_y, voxel_x, S_k=S_k, Lambda=Lambda, distance=distance[i], angle_to_voxel=angle_to_voxel[i], beta=beta_value[i], g_r=g_interp, F_r_theta=F_interp, G_fun=G_L, L=L)
+        beta_value[i] = beta_to_all(dwell_pos[i], voxel_z, voxel_y, voxel_x, L, norm_dwell_dir[i], cos_dir_to_voxel[i])
+        dose_rate[i] = TG43_dose_rate_single_dwell_to_all_voxels(voxel_z=voxel_z, voxel_y=voxel_y, voxel_x=voxel_x, S_k=S_k, Lambda=Lambda, distance=distance[i], angle_to_voxel=angle_to_voxel[i], beta=beta_value[i], G_fun=G_L, L=L)
 
     return distance, cos_dir_to_voxel, angle_to_voxel, beta_value, dose_rate
