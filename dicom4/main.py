@@ -1,7 +1,8 @@
 import matplotlib
 matplotlib.use('TkAgg')
 
-from dicom_loader import load_dicom, extract_dwell_points, extract_dwell_points_with_dwell_time_and_local_direction
+from dicom_loader import load_dicom
+from extract_dwell_point import extract_dwell_points, extract_dwell_points_with_dwell_time_and_local_direction
 from ui import start_ui
 import dose_contribution as dc
 import numpy as np
@@ -14,10 +15,9 @@ def main():
 
     volume, spacing, origin, direction, rtstruct, rtplan, rtdose = load_dicom(folder)
 
-    # print("Volume shape:", volume.shape)
     print("Intensity range:", volume.min(), volume.max())
 
-    extract_dwell_points(rtplan) # old function that prints dwell points with repeats, for comparison
+    # extract_dwell_points(rtplan) # old function that prints dwell points with repeats, for comparison
 
     dwells, count = extract_dwell_points_with_dwell_time_and_local_direction(rtplan = rtplan, local_directions = False) # new function that prints dwell points without repeats
     print(f"Extracted {count} dwell positions:")

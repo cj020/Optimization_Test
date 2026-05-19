@@ -275,12 +275,12 @@ def TG43_dose_rate_single_dwell_to_all_voxels(voxel_z, voxel_y, voxel_x, S_k, La
                 r = distance[k,j,i]
                 theta = angle_to_voxel[k,j,i]
                 beta_angle = beta[k,j,i]
-                # dose_rate_single_dwell[k,j,i] = TG43_dose_rate_single_dwell_to_single_voxel(S_k=S_k, Lambda=Lambda, r=r, theta=theta, beta=beta_angle, L=L)
+                dose_rate_single_dwell[k,j,i] = TG43_dose_rate_single_dwell_to_single_voxel(S_k=S_k, Lambda=Lambda, r=r, theta=theta, beta=beta_angle, L=L)
                 
-                if r < 50: # only calculate dose for voxels within 5 cm from the dwell position to save computation time, since the dose contribution from the dwell position to voxels beyond 5 cm is negligible
-                    dose_rate_single_dwell[k,j,i] = TG43_dose_rate_single_dwell_to_single_voxel(S_k=S_k, Lambda=Lambda, r=r, theta=theta, beta=beta_angle, L=L)
-                else:                    
-                    dose_rate_single_dwell[k,j,i] = 0.0
+                # if r < 50: # only calculate dose for voxels within 5 cm from the dwell position to save computation time, since the dose contribution from the dwell position to voxels beyond 5 cm is negligible
+                #     dose_rate_single_dwell[k,j,i] = TG43_dose_rate_single_dwell_to_single_voxel(S_k=S_k, Lambda=Lambda, r=r, theta=theta, beta=beta_angle, L=L)
+                # else:                    
+                #     dose_rate_single_dwell[k,j,i] = 0.0
 
     return dose_rate_single_dwell
 
