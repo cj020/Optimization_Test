@@ -1,7 +1,7 @@
 import matplotlib
 matplotlib.use('Agg') # Use the 'Agg' backend for matplotlib to avoid issues with GUI in headless environments (like servers or when running without a display). This allows us to generate plots without needing a graphical interface.
 
-from dicom_loader import load_dicom, extract_dwell_points_with_dwell_time_and_local_direction
+from dicom_loader import load_dicom, extract_dwell_points_with_dwell_time_and_direction
 import dose_contribution as dc
 import numpy as np
 import matplotlib.pyplot as plt
@@ -53,7 +53,7 @@ def main():
     print(f"\nSource strength S_k = {S_k:.4f} U (µGy·m²/h = cGy·cm²/h)")
     print(f"Dose-rate constant Lambda = {Lambda:.4f} cGy/(h·U)")
     
-    dwells, count = extract_dwell_points_with_dwell_time_and_local_direction(rtplan = rtplan, local_directions = False) # new function that prints dwell points without repeats
+    dwells, count = extract_dwell_points_with_dwell_time_and_direction(rtplan = rtplan, local_directions = False) # new function that prints dwell points without repeats
     print(f"Extracted {count} dwell positions:")
     
     dwell_positions = np.array([d[3] for d in dwells]) # extract the dwell positions (x, y, z) from the dwells list
@@ -115,6 +115,7 @@ def main():
         print(f"Mean calculated dose (non-zero): {np.mean(total_dose[nonzero_mask]):.6f} cGy")
 
     # the following needed to be fixed later
+    
     print("Distance shape:", distance.shape)
     # print("Distance:", distance)
     print("Cosine direction shape:", cosine_direction_to_voxel.shape)
