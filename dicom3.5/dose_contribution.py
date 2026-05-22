@@ -125,11 +125,10 @@ def beta(dwell_pos, voxel_pos, L, direction_L, cos_dir_from_dwell_to_voxel):
     float: The beta angle for the given position and voxel.
     """
 
-    if cos_dir_from_dwell_to_voxel >= 0:
-        end_point_L = (dwell_pos[0] + direction_L[0] * (L/2), dwell_pos[1] + direction_L[1] * (L/2), dwell_pos[2] + direction_L[2] * (L/2))
-    else:
-        end_point_L = (dwell_pos[0] - direction_L[0] * (L/2), dwell_pos[1] - direction_L[1] * (L/2), dwell_pos[2] - direction_L[2] * (L/2))
+    cos_sign = np.where(cos_dir_from_dwell_to_voxel >= 0, 1, -1) # determine the sign of the direction vector based on the cosine value
 
+    end_point_L = (dwell_pos[0] + cos_sign * direction_L[0] * (L/2), dwell_pos[1] + cos_sign * direction_L[1] * (L/2), dwell_pos[2] + cos_sign * direction_L[2] * (L/2))
+    
     vec_x_end_point_L_to_voxel = voxel_pos[2] - end_point_L[0]
     vec_y_end_point_L_to_voxel = voxel_pos[1] - end_point_L[1]
     vec_z_end_point_L_to_voxel = voxel_pos[0] - end_point_L[2]
@@ -164,10 +163,8 @@ def G_L(r, L, beta, theta):
     # beta: angle between the vector from the end point of the source to the voxel center and the vector from the middle of the source to the voxel center
     # theta: angle between the direction vector of the source and the vector from the middle of the source to the voxel center
 
-    if theta == 0:
-        G = 1 / (r**2 - L**2 / 4)
-    else:
-        G = beta / (L * r * np.sin(theta))
+    theta_zero = np.where(theta == 0, 1, 0) # determine the sign of theta for the geometry function calculation  
+    G = theta_zero * (1 / (r**2 - L**2 / 4)) + (1 - theta_zero) * (beta / (L * r * np.sin(theta)))
 
     return G
 
@@ -211,7 +208,7 @@ def compute_dose_single_dwell_vectorized(dwell_pos, norm_dir, volume_shape, voxe
 
     # Polar angle theta: angle between catheter direction and dwell-to-voxel vector
     # theta = 0 along catheter axis, theta = pi/2 perpendicular
-    cos_theta = (dx / r * norm_dir[0] + dy / r * norm_dir[1] + dz / r * norm_dir[2])
+    cos_theta = (dx / r * norm_dir[0] + dy / r * norm_dir[1] + dz / r * norm_dir[2]) 
     cos_theta = np.clip(cos_theta, -1.0, 1.0)
     theta = np.arccos(cos_theta)  # radians
 
@@ -220,14 +217,14 @@ def compute_dose_single_dwell_vectorized(dwell_pos, norm_dir, volume_shape, voxe
     beta_angle = beta(dwell_pos, voxel_pos, L, norm_dir, cos_theta)  # shape (nz, ny, nx)
 
     # Reference geometry: G(r0=1cm, theta0=90°)
-    G_L_0 = GL_0
+    G_ref = GL_0
     
     r_cm = r / 10.0 # convert distance from mm to cm
     theta_deg = np.degrees(theta) # convert angle from radians to degrees
 
     # TG-43 dose rate: D_dot = S_k * Lambda * (G/G_ref) * g(r) * F(r,theta)
     dose_rate = np.zeros(volume_shape, dtype=np.float64)
-    dose_rate = S_k * Lambda * G_L(r, L, beta_angle, theta)/G_L_0 * g_interp(r_cm) * F_interp((r_cm, theta_deg))
+    dose_rate = S_k * Lambda * G_L(r, L, beta_angle, theta)/G_ref * g_interp(r_cm) * F_interp((r_cm, theta_deg))
 
     # Clamp any negative values from extrapolation
     dose_rate = np.maximum(dose_rate, 0.0)
@@ -278,7 +275,7 @@ def dose_contribution(dwell_pos, norm_dwell_dir, dwell_times, volume, spacing, o
     voxel_z, voxel_y, voxel_x = voxel_coordinates(volume, spacing, origin) # get the coordinates of the center of each voxel in the volume
     
     beta0 = beta_0(r=10, L=L) # pre-calculate the beta angle at theta = 0, r = 1 cm.
-    GL0  = G_L(r=10, L=L, beta=beta0, theta=np.pi/2) # geometry function at theta = 90
+    GLref  = G_L(r=10, L=L, beta=beta0, theta=np.pi/2) # geometry function at theta = 90
 
     total_dose = np.zeros((nz, ny, nx), dtype=np.float64)
     n_dwells = len(dwell_pos)
@@ -302,7 +299,7 @@ def dose_contribution(dwell_pos, norm_dwell_dir, dwell_times, volume, spacing, o
             L=L,
             S_k=S_k,
             Lambda=Lambda,
-            GL_O=GL0
+            GL_0=GLref
         )
 
         # dose = dose_rate (cGy/h) * time (s) / 3600 (s/h) = cGy
