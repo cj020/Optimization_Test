@@ -224,7 +224,7 @@ def compute_dose_single_dwell_vectorized(dwell_pos, norm_dir, volume_shape, voxe
 
     # TG-43 dose rate: D_dot = S_k * Lambda * (G/G_ref) * g(r) * F(r,theta)
     dose_rate = np.zeros(volume_shape, dtype=np.float64)
-    dose_rate = S_k * Lambda * G_L(r, L, beta_angle, theta)/G_ref * g_interp(r_cm) * F_interp((r_cm, theta_deg))
+    dose_rate[mask] = S_k * Lambda * G_L(r, L, beta_angle, theta)[mask]/G_ref * g_interp(r_cm[mask]) * F_interp((r_cm[mask], theta_deg[mask]))
 
     # Clamp any negative values from extrapolation
     dose_rate = np.maximum(dose_rate, 0.0)
