@@ -1,3 +1,5 @@
+import sys
+import time
 from math import dist
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator, interp1d
@@ -17,9 +19,9 @@ g_interp = interp1d(
 
 # TG43 anisotropy function table for Ir-192, distances in cm, theta in degrees, used for interpolation
 r_vals_F = np.array([0, 0.25, 0.50, 1.00, 2.00, 3.00, 4.00, 5.00, 7.50, 10.00])
-theta_vals_F = np.array([0, 1, 2, 3, 5, 7, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90])
-theta_vals_F = np.append(theta_vals_F, [95, 100, 105, 110, 115, 120, 125, 130, 135, 140, 145, 150, 155, 
-                                        160, 165, 168, 170, 173, 175, 177, 178, 179, 180])     
+theta_vals_F = np.array([0, 1, 2, 3, 5, 7, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90,
+                         95, 100, 105, 110, 115, 120, 125, 130, 135, 140, 145, 150, 155, 
+                        160, 165, 168, 170, 173, 175, 177, 178, 179, 180])     
 
 # interpolation function
 # anisotropy table
@@ -57,7 +59,7 @@ F_table = np.array([
      0.919,0.898,0.874,0.855,0.838,0.809,0.791,0.766,0.751,0.734,0.722]
 ])
 
-F_table.shape == (len(r_vals_F), len(theta_vals_F))
+# F_table.shape == (len(r_vals_F), len(theta_vals_F))
 
 F_interp = RegularGridInterpolator(
     (r_vals_F, theta_vals_F),
@@ -66,9 +68,9 @@ F_interp = RegularGridInterpolator(
     fill_value=None
 )
 
-
 def voxel_coordinates(volume, spacing, origin):
-    """Calculate the coordinates of the center of each voxel in the volume."""
+    """Calculate the coordinates of the center of each voxel in the volume.
+    Returns z, y, x arrays in mm (world coordinates)."""
     
     nz, ny, nx = volume.shape
     
@@ -79,48 +81,11 @@ def voxel_coordinates(volume, spacing, origin):
     
     return z,y,x 
 
-def distance_to_all(pos, voxel_z, voxel_y, voxel_x):
-    """Calculate the distance from a given position to all other positions."""
-      
-    # Create a grid of voxel coordinates
-    
-    zz, yy, xx = np.meshgrid(voxel_z, voxel_y, voxel_x, indexing='ij') # creates three (nz * ny * nx) arrays where each stores one coordinate component (x, y, or z) for every voxel
-    dist = np.zeros(zz.shape, dtype=np.float32) # creates three (nz * ny * nx) arrays where each stores one coordinate component (x, y, or z) for every voxel.
-    
-    # Calculate the distance from the given position to each voxel center, create another (nz * ny * nx) array where each element is the distance from the given position to that voxel center
-    dist = np.sqrt((xx - pos[0])**2 + (yy - pos[1])**2 + (zz - pos[2])**2)
-    
-    return dist
-
-def direction_to_all(pos, norm_dir_vec, voxel_z, voxel_y, voxel_x):
-    """Calculate the angle as well as the cosine of the angle between the direction vector and the vector from a given position to all other positions."""
-      
-    # Create a grid of voxel coordinates
-    zz, yy, xx = np.meshgrid(voxel_z, voxel_y, voxel_x, indexing='ij') # creates three (nz * ny * nx) arrays where each stores one coordinate component (x, y, or z) for every voxel
-    cos_dir_to_voxel = np.zeros(zz.shape, dtype=np.float32) # initialize an array to store the cosine of the angle between the direction vector and the vector from the given position to each voxel center
-    angle_to_voxel = np.zeros(zz.shape, dtype=np.float32) # initialize an array to store the angle between the direction vector and the vector from the given position to each voxel center 
-
-    # Calculate the vector from the given position to each voxel center, create three (nz * ny * nx) arrays where each element is the vector component from the given position to that voxel center
-    vec_x = xx - pos[0]
-    vec_y = yy - pos[1]
-    vec_z = zz - pos[2]
-    vec_norm = np.sqrt(vec_x**2 + vec_y**2 + vec_z**2) # create another (nz * ny * nx) array where each element is the norm of the vector from the given position to that voxel center
-    vec_x_normalized = vec_x / (vec_norm + 1e-6) # normalize the vector from the given position to each voxel center, add a small value to avoid division by zero
-    vec_y_normalized = vec_y / (vec_norm + 1e-6)
-    vec_z_normalized = vec_z / (vec_norm + 1e-6)
-    
-    # Calculate the cosine of the angle between the direction vector and the vector from the given position to each voxel center, create another (nz * ny * nx) array where each element is the cosine of the angle between the direction vector and the vector from the given position to that voxel center
-    cos_dir_to_voxel = (vec_x_normalized * norm_dir_vec[0] + vec_y_normalized * norm_dir_vec[1] + vec_z_normalized * norm_dir_vec[2]) / 1.0
-    angle_to_voxel = np.arccos(cos_dir_to_voxel) # create another (nz * ny * nx) array where each element is the angle between the direction vector and the vector from the given position to that voxel center
-
-    return cos_dir_to_voxel, angle_to_voxel
-
 def beta_0(r, L):
     """
-    Calculate the beta angle for r = 1 cm and theta = 0, which can be used as a constant value in the G_L function for theta = 0.
+    Calculate the beta angle for r = 1 cm and theta = 90, which can be used as a constant value in the G_L function for theta = 0.
     """
-
-    # For r = 1 cm and theta = 0, the voxel position is directly in front of the source along the direction vector, so the beta angle can be calculated using the geometry of the source and the voxel position. Assuming the source is centered at the origin and extends from -L/2 to L/2 along the z-axis, the end point of the source closest to the voxel is at (0, 0, L/2) if cos_dir_from_dwell_to_voxel >= 0, or (0, 0, -L/2) if cos_dir_from_dwell_to_voxel < 0. The vector from this end point to the voxel position (which is at (0, 0, r)) is then (0, 0, r - L/2) or (0, 0, r + L/2), respectively. The vector from the middle of the source to the voxel position is (0, 0, r). The beta angle can then be calculated as the angle between these two vectors.
+    # For r = 1 cm and theta = 90, the voxel position is directly in front of the source along the direction vector, so the beta angle can be calculated using the geometry of the source and the voxel position. Assuming the source is centered at the origin and extends from -L/2 to L/2 along the z-axis, the end point of the source closest to the voxel is at (0, 0, L/2) if cos_dir_from_dwell_to_voxel >= 0, or (0, 0, -L/2) if cos_dir_from_dwell_to_voxel < 0. The vector from this end point to the voxel position (which is at (0, 0, r)) is then (0, 0, r - L/2) or (0, 0, r + L/2), respectively. The vector from the middle of the source to the voxel position is (0, 0, r). The beta angle can then be calculated as the angle between these two vectors.
 
     end_point_L = (L/2, 0, 0) # end point of the source closest to the voxel for theta = 0 in (x, y, z) format
     voxel_pos = (r, 0, 0) # voxel position for r = 1 cm, in (z, y, x) format
@@ -192,31 +157,6 @@ def beta(dwell_pos, voxel_pos, L, direction_L, cos_dir_from_dwell_to_voxel):
 
     return beta_angle
 
-def beta_to_all(dwell_pos, voxel_z, voxel_y, voxel_x, L, direction_L, cos_dir_from_dwell_to_voxel):
-    """Calculate the beta angle from a given position to all other positions.
-    
-    Parameters:
-    pos (tuple): The position of the dwell point in world coordinates (x, y, z).
-    voxel_z, voxel_y, voxel_x (arrays): The coordinates of the center of each voxel in the volume.
-    L (float): The length of the source.
-    direction_L: The direction vector of the catheter. in (dx, dy, dz) format and should be normalized to unit vector.
-    cos_dir_from_dwell_to_voxel (array): The cosine of the angle between the direction vector and the vector from the dwell position to each voxel center.
-    """ 
-
-    # Create a grid of voxel coordinates
-    zz, yy, xx = np.meshgrid(voxel_z, voxel_y, voxel_x, indexing='ij') # creates three (nz * ny * nx) arrays where each stores one coordinate component (x, y, or z) for every voxel
-
-    beta_angle = np.zeros(zz.shape, dtype=np.float32) # initialize an array to store the beta angle from the given position to each voxel center
-
-    for k in range(zz.shape[0]):
-        for j in range(zz.shape[1]):
-            for i in range(zz.shape[2]):
-                voxel_pos = (zz[k,j,i], yy[k,j,i], xx[k,j,i])
-                cos_dir_from_dwell_to_voxel_individual = cos_dir_from_dwell_to_voxel[k,j,i]
-                beta_angle[k,j,i] = beta(dwell_pos, voxel_pos, L, direction_L, cos_dir_from_dwell_to_voxel_individual)
-
-    return beta_angle   
-
 def G_L(r, L, beta, theta):
     """Calculate the geometry function G_L for a given distance, source length, beta angle, and theta angle."""
     # r: distance from the source to the point of interest
@@ -231,86 +171,146 @@ def G_L(r, L, beta, theta):
 
     return G
 
-def TG43_dose_rate_single_dwell_to_single_voxel(S_k, Lambda, r, theta, beta, L):
-    """Calculate the 2D TG43 dose rate for a given air kerma strength, dose-rate constant, distance, radial dose function, anisotropy function, and geometry function."""
-    # S_k: air kerma strength in cGy*cm^2/h
-    # Lambda: dose-rate constant in cGy/h/U, where U is the unit of air kerma strength (cGy*cm^2/h)
-    # r: distance from the source to the point of interest in cm
-    # g_r: radial dose function at distance r
-    # F_r_theta: anisotropy function at distance r and angle theta
-    # G_L: geometry function for a source of length L
-    
-    beta0 = beta_0(r=10, L=3.5) # the beta angle at theta = 0, r = 1 cm, which can be calculated using the beta function defined above with the appropriate parameters for the source and voxel positions. This is a constant value that can be pre-calculated and used in the G_L function for theta = 0.
-    G_L_0  = G_L(r, L, beta0, np.pi/2) # geometry function at theta = 90
+def compute_dose_single_dwell_vectorized(dwell_pos, norm_dir, volume_shape, voxel_z, voxel_y, voxel_x, L, S_k, Lambda, GL_0, r_cutoff_mm=50.0):
+    """
+    Compute the TG-43 dose rate from a single dwell position to all voxels (vectorized).
 
+    Parameters
+    ----------
+    dwell_pos : array (3,) — dwell position in world coords (x, y, z) in mm
+    norm_dir : array (3,) — normalized catheter direction vector (dx, dy, dz)
+    volume_shape : tuple (nz, ny, nx)
+    voxel_z, voxel_y, voxel_x : 1D arrays of voxel center coordinates in mm
+    L : float — active source length in mm
+    S_k : float — air kerma strength in cGy·cm²/h
+    Lambda : float — dose-rate constant in cGy/(h·U)
+    r_cutoff_mm : float — ignore voxels further than this (mm)
+
+    Returns
+    -------
+    dose_rate : array (nz, ny, nx) in cGy/h
+    """
+
+    nz, ny, nx = volume_shape
+
+    # Build 3D coordinate grids
+    zz, yy, xx = np.meshgrid(voxel_z, voxel_y, voxel_x, indexing='ij')
+
+    # Vector from dwell to each voxel
+    dx = xx - dwell_pos[0]
+    dy = yy - dwell_pos[1]
+    dz = zz - dwell_pos[2]
+
+    # Distance r (mm) — clamp to source outer radius to avoid singularity
+    r = np.sqrt(dx**2 + dy**2 + dz**2)
+    r_min_mm = 2.0  # ~source capsule outer radius for Ir-192 HDR
+    r = np.maximum(r, r_min_mm)
+
+    # Mask: only compute for voxels within cutoff
+    mask = r < r_cutoff_mm
+
+    # Polar angle theta: angle between catheter direction and dwell-to-voxel vector
+    # theta = 0 along catheter axis, theta = pi/2 perpendicular
+    cos_theta = (dx / r * norm_dir[0] + dy / r * norm_dir[1] + dz / r * norm_dir[2])
+    cos_theta = np.clip(cos_theta, -1.0, 1.0)
+    theta = np.arccos(cos_theta)  # radians
+
+    # Beta angle: 
+    voxel_pos = (zz, yy, xx)  # shape (nz, ny, nx)
+    beta_angle = beta(dwell_pos, voxel_pos, L, norm_dir, cos_theta)  # shape (nz, ny, nx)
+
+    # Reference geometry: G(r0=1cm, theta0=90°)
+    G_L_0 = GL_0
+    
     r_cm = r / 10.0 # convert distance from mm to cm
     theta_deg = np.degrees(theta) # convert angle from radians to degrees
 
-    dose_rate = S_k * Lambda * G_L(r, L, beta, theta)/G_L_0 * g_interp(r_cm) * F_interp((r_cm, theta_deg)) 
+    # TG-43 dose rate: D_dot = S_k * Lambda * (G/G_ref) * g(r) * F(r,theta)
+    dose_rate = np.zeros(volume_shape, dtype=np.float64)
+    dose_rate = S_k * Lambda * G_L(r, L, beta_angle, theta)/G_L_0 * g_interp(r_cm) * F_interp((r_cm, theta_deg))
 
-    return dose_rate
+    # Clamp any negative values from extrapolation
+    dose_rate = np.maximum(dose_rate, 0.0)
 
+    return dose_rate.astype(np.float32)
 
-def TG43_dose_rate_single_dwell_to_all_voxels(voxel_z, voxel_y, voxel_x, S_k, Lambda, distance, angle_to_voxel, beta, L):
-    """Calculate the 2D TG43 dose rate from a single dwell position to all voxels in the volume grid."""
-    # S_k: air kerma strength in cGy*cm^2/h
-    # Lambda: dose-rate constant in cGy/h/U, where U is the unit of air kerma strength (cGy*cm^2/h)
-    # distance: distance from the dwell position to each voxel center in mm, shape = (nz, ny, nx)
-    # angle_to_voxel: angle between the local direction vector of the dwell position and the vector from the dwell position to each voxel center in radians, shape = (nz, ny, nx)
-    # beta: beta angle for each voxel center, shape = (nz, ny, nx)
-    # cos_dir_to_voxel: cosine of the angle between the local direction vector of the dwell position and the vector from the dwell position to each voxel center, shape = (nz, ny, nx)
-    # g_interp: interpolation function for the radial dose function g(r), which takes distance in cm as input and returns g(r) as output
-    # F_interp: interpolation function for the anisotropy function F(r, theta), which takes distance in cm and angle in degrees as input and returns F(r, theta) as output
-    # G_L: geometry function for a source of length L
-    # L: length of the source in mm
+def print_progress_bar(current, total, bar_length=40, prefix='', suffix='', elapsed=None):
+    """Print a progress bar to stdout."""
+    fraction = current / total if total > 0 else 0
+    filled = int(bar_length * fraction)
+    bar = '█' * filled + '░' * (bar_length - filled)
+    pct = 100.0 * fraction
 
-    # Create a grid of voxel coordinates
+    eta_str = ''
+    if elapsed is not None and current > 0:
+        eta = elapsed * (total - current) / current
+        if eta > 60:
+            eta_str = f" ETA: {eta/60:.1f}min"
+        else:
+            eta_str = f" ETA: {eta:.0f}s"
+
+    sys.stdout.write(f'\r  {prefix} |{bar}| {pct:5.1f}% ({current}/{total}){suffix}{eta_str}   ')
+    sys.stdout.flush()
+    if current == total:
+        sys.stdout.write('\n')
+        sys.stdout.flush()
+
+def dose_contribution(dwell_pos, norm_dwell_dir, dwell_times, volume, spacing, origin, L, S_k, Lambda):
+    """Calculate the dose contribution from all dwell position to the volume grid.
     
-    zz, yy, xx = np.meshgrid(voxel_z, voxel_y, voxel_x, indexing='ij') # creates three (nz * ny * nx) arrays where each stores one coordinate component (x, y, or z) for every voxel
-    dose_rate_single_dwell = np.zeros(zz.shape, dtype=np.float32) # creates three (nz * ny * nx) arrays where each stores one coordinate component (x, y, or z) for every voxel.
-    
-    for k in range(zz.shape[0]):
-        for j in range(zz.shape[1]):
-            for i in range(zz.shape[2]):
-                r = distance[k,j,i]
-                theta = angle_to_voxel[k,j,i]
-                beta_angle = beta[k,j,i]
-                # dose_rate_single_dwell[k,j,i] = TG43_dose_rate_single_dwell_to_single_voxel(S_k=S_k, Lambda=Lambda, r=r, theta=theta, beta=beta_angle, L=L)
-                
-                if r < 50: # only calculate dose for voxels within 5 cm from the dwell position to save computation time, since the dose contribution from the dwell position to voxels beyond 5 cm is negligible
-                    dose_rate_single_dwell[k,j,i] = TG43_dose_rate_single_dwell_to_single_voxel(S_k=S_k, Lambda=Lambda, r=r, theta=theta, beta=beta_angle, L=L)
-                else:                    
-                    dose_rate_single_dwell[k,j,i] = 0.0
+    Parameters
+    ----------
+    dwell_pos : array (N, 3) — dwell positions (x, y, z) in mm
+    norm_dwell_dir : array (N, 3) — normalized direction vectors
+    dwell_times : array (N,) — irradiation time per dwell in seconds
+    volume : array (nz, ny, nx) — CT/dose volume (used for shape only)
+    spacing : tuple (dx, dy, dz) in mm
+    origin : tuple (x0, y0, z0) in mm
+    L : float — active source length in mm
+    S_k : float — air kerma strength in cGy·cm²/h
+    Lambda : float — dose-rate constant in cGy/(h·U)
 
-    return dose_rate_single_dwell
-
-def dose_contribution(dwell_pos, norm_dwell_dir, dwell_count, volume, spacing, origin, L, S_k, Lambda):
-    """Calculate the dose contribution from all dwell position to the volume grid."""
+    Returns
+    -------
+    total_dose : array (nz, ny, nx) — accumulated dose in cGy."""
     
     nz, ny, nx = volume.shape
     voxel_z, voxel_y, voxel_x = voxel_coordinates(volume, spacing, origin) # get the coordinates of the center of each voxel in the volume
-    # zz, yy, xx = np.meshgrid(voxel_z, voxel_y, voxel_x, indexing='ij') # creates three (nz * ny * nx) arrays where each stores one coordinate component (x, y, or z) for every voxel
-
-    distance = np.zeros((dwell_count, nz, ny, nx), dtype=np.float32) # initialize arrays to store the dose contribution from the dwell position to each voxel in the volume grid
-    cos_dir_to_voxel = np.zeros((dwell_count, nz, ny, nx), dtype=np.float32)
-    angle_to_voxel = np.zeros((dwell_count, nz, ny, nx), dtype=np.float32)
-    beta_value = np.zeros((dwell_count, nz, ny, nx), dtype=np.float32)
-    dose_rate = np.zeros((dwell_count, nz, ny, nx), dtype=np.float32)
-
-    for i in range(dwell_count):
-        # Calculate the dose contribution from the current dwell position
-        dist = distance_to_all(dwell_pos[i], voxel_z, voxel_y, voxel_x)
-        
-        # np.max(dist)
-        # np.min(dist)
-        
-        distance[i] = dist
     
-        # Calculate the angle between the local direction vector of the current dwell position and the vector from the current dwell position to each voxel center
-        cos_dir, angle = direction_to_all(dwell_pos[i], norm_dwell_dir[i], voxel_z, voxel_y, voxel_x)
-        cos_dir_to_voxel[i] = cos_dir
-        angle_to_voxel[i] = angle
-        beta_value[i] = beta_to_all(dwell_pos[i], voxel_z, voxel_y, voxel_x, L, norm_dwell_dir[i], cos_dir_to_voxel[i])
-        dose_rate[i] = TG43_dose_rate_single_dwell_to_all_voxels(voxel_z=voxel_z, voxel_y=voxel_y, voxel_x=voxel_x, S_k=S_k, Lambda=Lambda, distance=distance[i], angle_to_voxel=angle_to_voxel[i], beta=beta_value[i], L=L)
+    beta0 = beta_0(r=10, L=L) # pre-calculate the beta angle at theta = 0, r = 1 cm.
+    GL0  = G_L(r=10, L=L, beta=beta0, theta=np.pi/2) # geometry function at theta = 90
 
-    return distance, cos_dir_to_voxel, angle_to_voxel, beta_value, dose_rate
+    total_dose = np.zeros((nz, ny, nx), dtype=np.float64)
+    n_dwells = len(dwell_pos)
+    active_dwells = np.sum(dwell_times > 0)
+
+    print(f"  Total dwells: {n_dwells}, Active (time > 0): {active_dwells}")
+    t_start = time.time() # start time for dose calculation
+    computed = 0 # counter for the number of dwell positions that have been computed for dose contribution
+
+    for i in range(n_dwells):
+        if dwell_times[i] <= 0:
+            continue
+
+        dose_rate = compute_dose_single_dwell_vectorized(
+            dwell_pos=dwell_pos[i],
+            norm_dir=norm_dwell_dir[i],
+            volume_shape=(nz, ny, nx),
+            voxel_z=voxel_z,
+            voxel_y=voxel_y,
+            voxel_x=voxel_x,
+            L=L,
+            S_k=S_k,
+            Lambda=Lambda,
+            GL_O=GL0
+        )
+
+        # dose = dose_rate (cGy/h) * time (s) / 3600 (s/h) = cGy
+        total_dose += dose_rate.astype(np.float64) * (dwell_times[i] / 3600.0)
+        computed += 1
+        print_progress_bar(computed, active_dwells, prefix='Dose calc', elapsed=time.time() - t_start)
+
+    elapsed = time.time() - t_start
+    print(f"  Completed in {elapsed:.1f}s ({elapsed/active_dwells:.2f}s per active dwell)")
+
+    return total_dose.astype(np.float32)

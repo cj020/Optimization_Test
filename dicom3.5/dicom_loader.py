@@ -319,3 +319,27 @@ def extract_dwell_points_with_dwell_time_and_direction(rtplan, local_directions 
     print(f"{'='*80}\n")
 
     return dwells, count
+
+def get_rtdose_grid_info(folder):
+    """Re-read RTDOSE file to get grid geometry."""
+    for root, dirs, files in os.walk(folder):
+        for f in files:
+            path = os.path.join(root, f)
+            try:
+                ds = pydicom.dcmread(path, stop_before_pixels=True)
+                if getattr(ds, "Modality", None) == "RTDOSE":
+                    dose_ds = pydicom.dcmread(path)
+                    return dose_ds
+            except Exception:
+                continue
+    return None
+
+def get_source_strength(rtplan):
+    """Extract ReferenceAirKermaRate from RTPLAN (in µGy·m²/h = cGy·cm²/h = U)."""
+    if rtplan is None:
+        return None
+    for src in rtplan.SourceSequence:
+        rakr = getattr(src, "ReferenceAirKermaRate", None)
+        if rakr is not None:
+            return float(rakr)
+    return None

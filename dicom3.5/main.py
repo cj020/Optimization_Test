@@ -1,36 +1,13 @@
 import matplotlib
 matplotlib.use('Agg') # Use the 'Agg' backend for matplotlib to avoid issues with GUI in headless environments (like servers or when running without a display). This allows us to generate plots without needing a graphical interface.
 
-from dicom_loader import load_dicom, extract_dwell_points_with_dwell_time_and_direction
+from dicom_loader import load_dicom, extract_dwell_points_with_dwell_time_and_direction, get_rtdose_grid_info, get_source_strength
 import dose_contribution as dc
+from ui import start_ui
 import numpy as np
 import matplotlib.pyplot as plt
 import pydicom
 import os
-
-def get_rtdose_grid_info(folder):
-    """Re-read RTDOSE file to get grid geometry."""
-    for root, dirs, files in os.walk(folder):
-        for f in files:
-            path = os.path.join(root, f)
-            try:
-                ds = pydicom.dcmread(path, stop_before_pixels=True)
-                if getattr(ds, "Modality", None) == "RTDOSE":
-                    dose_ds = pydicom.dcmread(path)
-                    return dose_ds
-            except Exception:
-                continue
-    return None
-
-def get_source_strength(rtplan):
-    """Extract ReferenceAirKermaRate from RTPLAN (in µGy·m²/h = cGy·cm²/h = U)."""
-    if rtplan is None:
-        return None
-    for src in rtplan.SourceSequence:
-        rakr = getattr(src, "ReferenceAirKermaRate", None)
-        if rakr is not None:
-            return float(rakr)
-    return None
 
 def main():
     folder = r"C:\Users\jichen\Downloads\T00060\T00060"
@@ -64,7 +41,7 @@ def main():
     print(f"Total irradiation time: {np.sum(dwell_times):.2f} s")
     print(f"Non-zero dwell positions: {np.sum(dwell_times > 0)}")
 
-    # start_ui(volume, spacing, origin, dwell_positions)
+    start_ui(volume, spacing, origin, dwell_positions)
     
     # Get RTDOSE grid info for computing on same grid
     dose_ds = get_rtdose_grid_info(folder)
