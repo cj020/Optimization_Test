@@ -177,6 +177,112 @@ def G_L(r, L, beta, theta):
 def compute_dose_single_dwell_vectorized(dwell_pos, norm_dir, volume_shape, voxel_z, voxel_y, voxel_x, L, S_k, Lambda, GL_0, r_cutoff_mm=50.0):
     """
     Compute the TG-43 dose rate from a single dwell position to all voxels (vectorized).
+    Includes computation of distance, theta, beta, G, g, F in this function.
+
+    Parameters
+    ----------
+    dwell_pos : array (3,) — dwell position in world coords (x, y, z) in mm
+    norm_dir : array (3,) — normalized catheter direction vector (dx, dy, dz)
+    volume_shape : tuple (nz, ny, nx)
+    voxel_z, voxel_y, voxel_x : 1D arrays of voxel center coordinates in mm
+    L : float — active source length in mm
+    S_k : float — air kerma strength in cGy·cm²/h
+    Lambda : float — dose-rate constant in cGy/(h·U)
+    r_cutoff_mm : float — ignore voxels further than this (mm)
+
+    Returns
+    -------
+    dose_rate : array (nz, ny, nx) in cGy/h
+    """
+
+    nz, ny, nx = volume_shape
+
+    # Build 3D coordinate grids
+    zz, yy, xx = np.meshgrid(voxel_z, voxel_y, voxel_x, indexing='ij')
+
+    # Vector from dwell to each voxel
+    dx = xx - dwell_pos[0]
+    dy = yy - dwell_pos[1]
+    dz = zz - dwell_pos[2]
+
+    # Distance r (mm) — clamp to source outer radius to avoid singularity
+    r = np.sqrt(dx**2 + dy**2 + dz**2)
+    r_min_mm = 2.0  # ~source capsule outer radius for Ir-192 HDR
+    r = np.maximum(r, r_min_mm)
+
+    # Mask: only compute for voxels within cutoff
+    mask = r < r_cutoff_mm
+
+    # Polar angle theta: angle between catheter direction and dwell-to-voxel vector
+    # theta = 0 along catheter axis, theta = pi/2 perpendicular
+    cos_theta = (dx / r * norm_dir[0] + dy / r * norm_dir[1] + dz / r * norm_dir[2]) 
+    cos_theta = np.clip(cos_theta, -1.0, 1.0)
+    theta = np.arccos(cos_theta)  # radians
+
+    # Beta angle: angle subtended by source at the point of interest
+    # Source endpoints: dwell_pos ± (L/2) * norm_dir
+    half_L = L / 2.0
+    end1 = dwell_pos + half_L * norm_dir  # (x, y, z)
+    end2 = dwell_pos - half_L * norm_dir
+    
+    # Vectors from each source endpoint to voxel
+    v1x = xx - end1[0]
+    v1y = yy - end1[1]
+    v1z = zz - end1[2]
+    r1 = np.sqrt(v1x**2 + v1y**2 + v1z**2)
+    r1 = np.maximum(r1, 0.1)
+
+    v2x = xx - end2[0]
+    v2y = yy - end2[1]
+    v2z = zz - end2[2]
+    r2 = np.sqrt(v2x**2 + v2y**2 + v2z**2)
+    r2 = np.maximum(r2, 0.1)
+
+    # Beta = angle between vectors (voxel - end1) and (voxel - end2)
+    cos_beta = (v1x * v2x + v1y * v2y + v1z * v2z) / (r1 * r2)
+    cos_beta = np.clip(cos_beta, -1.0, 1.0)
+    beta_angle = np.arccos(cos_beta)
+
+    # Reference geometry: G(r0=1cm, theta0=90°)
+    G_ref = GL_0
+    
+    # Geometry function G_L(r, theta)
+    sin_theta = np.sin(theta)
+    small_angle = sin_theta < 1e-6
+
+    G = np.where(
+        small_angle,
+        1.0 / (r**2 - (L / 2.0)**2),  # theta ≈ 0 or pi (on-axis)
+        beta_angle / (L * r * sin_theta)      # general case
+    )
+   
+    r_cm = r / 10.0 # convert distance from mm to cm
+
+    # Radial dose function g(r)
+    g_r = g_interp(r_cm)
+
+    theta_deg = np.degrees(theta) # convert angle from radians to degrees
+
+    # Prepare points for interpolation (flattened)
+    points = np.column_stack([r_cm[mask].ravel(), theta_deg[mask].ravel()]) # shape (N_masked_voxels, 2)
+    F_values_flat = F_interp(points)
+
+    # Build full F array
+    F_r_theta = np.ones_like(r, dtype=np.float64) # default to 1.0 for out-of-bounds
+    F_r_theta[mask] = F_values_flat
+
+    # TG-43 dose rate: D_dot = S_k * Lambda * (G/G_ref) * g(r) * F(r,theta)
+    dose_rate = np.zeros(volume_shape, dtype=np.float64)
+    dose_rate[mask] = S_k * Lambda * (G[mask]/G_ref) * g_r[mask] * F_r_theta[mask]
+
+    # Clamp any negative values from extrapolation
+    dose_rate = np.maximum(dose_rate, 0.0)
+
+    return dose_rate.astype(np.float32)
+
+def compute_dose_single_dwell_vectorized_old(dwell_pos, norm_dir, volume_shape, voxel_z, voxel_y, voxel_x, L, S_k, Lambda, GL_0, r_cutoff_mm=50.0):
+    """
+    Compute the TG-43 dose rate from a single dwell position to all voxels (vectorized).
 
     Parameters
     ----------
