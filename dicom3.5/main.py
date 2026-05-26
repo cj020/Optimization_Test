@@ -91,35 +91,68 @@ def main():
     if np.any(nonzero_mask):
         print(f"Mean calculated dose (non-zero): {np.mean(total_dose[nonzero_mask]):.6f} cGy")
 
-    # the following needed to be fixed later
-    
-    print("Distance shape:", distance.shape)
-    # print("Distance:", distance)
-    print("Cosine direction shape:", cosine_direction_to_voxel.shape)
-    # print("Cosine direction:", cosine_direction_to_voxel)
-    print("Angle to voxel shape:", angle_to_voxel.shape)
-    # print("Angle to voxel:", angle_to_voxel)
-    print("Beta angle shape:", beta_value.shape)
-    # print("Beta angle:", beta_value)
-    print("Dose rate shape:", dose_rate.shape)
-    # print("Dose rate:", dose_rate)
-    
-    dose = np.zeros((count, *volume.shape), dtype=np.float32)
-    for i in range(count):
-        dose[i] = dose_rate[i] * dwell_times[i] # dose = dose rate * time
+    # Reference dose (RTDOSE is in Gy — keep as-is since gamma uses relative dose)
+    dose_ref = rtdose.astype(np.float32)
+    print(f"\nMax reference dose (RTDOSE): {np.max(dose_ref):.6f} Gy")
+    print(f"Mean reference dose (non-zero): {np.mean(dose_ref[dose_ref > 0]):.6f} Gy")
 
-    print("Dose shape:", dose.shape)
-    print("Dose:", dose)
+    # Gamma index comparison
+    print("\n" + "="*60)
+    print("GAMMA INDEX COMPARISON (3%/3mm)")
+    print("="*60)
 
-    print("Average dose rate:", np.average(dose_rate)) # print the average dose for testing
-    print("Maximum dose rate:", np.max(dose_rate)) # print the maximum dose for testing
-    print("Minimum dose rate:", np.min(dose_rate)) # print the minimum dose for testing
-    print("Average dose:", np.average(dose)) # print the average dose for testing
-    print("Maximum dose:", np.max(dose)) # print the maximum dose for testing
-    print("Minimum dose:", np.min(dose)) 
+    gamma, pass_rate = dc.gamma_index_3d(
+        dose_vol_1=total_dose,  # calculated dose in cGy
+        dose_vol_2=dose_ref,    # reference dose in Gy (relative dose comparison)
+        spacing=dose_spacing,
+        gamma_dist=3.0,
+        gamma_percentage=3.0,
+        cut_off=0.1
+    )  
 
-def new_func():
-    return# print the minimum dose for testing
+    print(f"\n{'='*60}")
+    print(f"GAMMA INDEX RESULTS")
+    print(f"{'='*60}")
+
+    print(f"Pass rate (3%/3mm): {pass_rate:.2f}%")
+    valid_gamma = gamma[gamma > 0]
+    if len(valid_gamma) > 0:
+        print(f"Mean gamma: {np.mean(valid_gamma):.4f}")
+        print(f"Max gamma: {np.max(valid_gamma):.4f}")
+        print(f"Gamma <= 1: {np.sum(valid_gamma <= 1.0)} / {len(valid_gamma)} voxels")
+
+    # Save comparison figure using relative dose
+    mid_z = nz_d // 2
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+    # Normalize for display
+    rel_ref_display = dose_ref / np.max(dose_ref) * 100.0
+    rel_calc_display = total_dose / np.max(total_dose) * 100.0 if np.max(total_dose) > 0 else total_dose
+
+    ax = axes[0]
+    im = ax.imshow(rel_ref_display[mid_z], cmap='jet', aspect='equal', vmin=0, vmax=100)
+    ax.set_title("Reference (RTDOSE) - Relative")
+    plt.colorbar(im, ax=ax, label='% of max')
+
+    ax = axes[1]
+    im = ax.imshow(rel_calc_display[mid_z], cmap='jet', aspect='equal', vmin=0, vmax=100)
+    ax.set_title("Calculated (TG-43) - Relative")
+    plt.colorbar(im, ax=ax, label='% of max')
+
+    ax = axes[2]
+    im = ax.imshow(gamma[mid_z], cmap='RdYlGn_r', vmin=0, vmax=2, aspect='equal')
+    ax.set_title(f"Gamma Index (pass: {pass_rate:.1f}%)")
+    plt.colorbar(im, ax=ax, label='Gamma')
+
+    plt.tight_layout()
+    plt.savefig('gamma_comparison.png', dpi=150)
+    print(f"\nComparison figure saved to: gamma_comparison.png")
+
+    # Save the dose arrays for further analysis
+    np.save('dose_calculated_tg43.npy', total_dose)
+    np.save('dose_reference_rtdose.npy', dose_ref)
+    np.save('gamma_map.npy', gamma)
+    print("Dose arrays saved to .npy files.")
 
 if __name__ == "__main__": # Only run the code below if this file is being executed directly, not imported as a module in another file.
     main()

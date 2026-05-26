@@ -423,3 +423,153 @@ def dose_contribution(dwell_pos, norm_dwell_dir, dwell_times, volume, spacing, o
     print(f"  Completed in {elapsed:.1f}s ({elapsed/active_dwells:.2f}s per active dwell)")
 
     return total_dose.astype(np.float32)
+
+def gamma_index_3d(dose_vol_1, dose_vol_2, spacing, gamma_dist=3.0, gamma_percentage=3.0, cut_off=0.1, ref_dose=None):
+    """
+    3D gamma analysis based on Daniel A. Low 1998 Med Phys paper.
+    Vectorized Python implementation of the MATLAB gamma3D_general function.
+
+    Uses RELATIVE dose: both volumes are normalized to their respective maxima.
+
+    Parameters
+    ----------
+    dose_vol_1 : array (nz, ny, nx) — reference dose volume (any units)
+    dose_vol_2 : array (nz, ny, nx) — evaluation dose volume (same shape)
+    spacing : tuple (dx, dy, dz) — voxel sizes in mm
+    gamma_dist : float — distance-to-agreement criterion in mm
+    gamma_percentage : float — dose difference criterion in %
+    cut_off : float — fraction of ref_dose below which voxels are excluded (0-1)
+    ref_dose : float or None — normalization dose; if None, uses max of dose_vol_1
+
+    Returns
+    -------
+    gamma_map : array (nz, ny, nx) — gamma values (0 where below threshold)
+    pass_rate : float — percentage of evaluated voxels with gamma <= 1
+    """
+
+    if dose_vol_1.shape != dose_vol_2.shape: # check if the two dose volumes have the same shape
+        print("  ERROR: Matrix sizes do not match.")
+        return np.zeros(dose_vol_1.shape, dtype=np.float32), 0.0
+    
+    # Normalize to relative dose using robust normalization
+    # Use 99.9th percentile to avoid near-source hot spot singularities
+    nonzero_1 = dose_vol_1[dose_vol_1 > 0]
+    nonzero_2 = dose_vol_2[dose_vol_2 > 0]
+
+    if len(nonzero_1) == 0 or len(nonzero_2) == 0:
+        print("  WARNING: One of the dose distributions is all zeros.")
+        return np.zeros(dose_vol_1.shape, dtype=np.float32), 0.0
+    
+    norm_1 = np.percentile(nonzero_1, 99.9)
+    norm_2 = np.percentile(nonzero_2, 99.9)
+
+    dose_vol_1 = np.clip(dose_vol_1 / norm_1, 0, None).astype(np.float32)
+    dose_vol_2 = np.clip(dose_vol_2 / norm_2, 0, None).astype(np.float32)
+
+    print(f"  Using RELATIVE dose normalization (99.9th percentile):")
+    print(f"    Volume 1: norm={norm_1:.4f}, max after norm={np.max(dose_vol_1):.4f}")
+    print(f"    Volume 2: norm={norm_2:.4f}, max after norm={np.max(dose_vol_2):.4f}")
+
+    voxel_sizes = np.array([float(spacing[0]), float(spacing[1]), float(spacing[2])])
+
+    if ref_dose is None or ref_dose == 0: # if ref_dose is not provided or is zero, use the maximum dose in dose_vol_1 as the reference dose for normalization. This ensures that the gamma analysis is based on relative dose differences rather than absolute values, which can be more meaningful for comparing dose distributions.
+        ref_dose = np.max(dose_vol_1)
+
+    dim = dose_vol_1.shape  # (nz, ny, nx)
+
+    # Build search offsets
+    ranges_indices = np.ceil(gamma_dist / voxel_sizes).astype(int) # number of voxels to search in each direction based on the gamma distance criterion and voxel sizes
+
+    dx_indices = np.arange(-ranges_indices[0], ranges_indices[0] + 1)
+    dy_indices = np.arange(-ranges_indices[1], ranges_indices[1] + 1)
+    dz_indices = np.arange(-ranges_indices[2], ranges_indices[2] + 1)
+
+    xx_ind, yy_ind, zz_ind = np.meshgrid(dx_indices, dy_indices, dz_indices, indexing='ij')
+    xx_ind = xx_ind.ravel()
+    yy_ind = yy_ind.ravel()
+    zz_ind = zz_ind.ravel()
+
+    # Distance squared (normalized by gamma_dist^2)
+    dr = np.sqrt((xx_ind * voxel_sizes[0])**2 + (yy_ind * voxel_sizes[1])**2 + (zz_ind * voxel_sizes[2])**2)
+    dr2 = dr**2 / gamma_dist**2
+    dr2b = np.maximum(dr2, 1.0)
+
+    N_offsets = len(xx_ind)
+
+    # Determine evaluation region (bounding box of voxels above threshold)
+    mask = (dose_vol_1 > (ref_dose * cut_off)) | (dose_vol_2 > (ref_dose * cut_off))
+
+    # Find bounding box
+    z_any = np.any(mask, axis=(1, 2))
+    y_any = np.any(mask, axis=(0, 2))
+    x_any = np.any(mask, axis=(0, 1))
+
+    if not np.any(z_any):
+        print("  WARNING: No voxels above cutoff threshold.")
+        return np.zeros(dim, dtype=np.float32), 0.0
+
+    iz = np.arange(np.argmax(z_any), len(z_any) - np.argmax(z_any[::-1]))
+    iy = np.arange(np.argmax(y_any), len(y_any) - np.argmax(y_any[::-1]))
+    ix = np.arange(np.argmax(x_any), len(x_any) - np.argmax(x_any[::-1]))
+
+    # Dose difference normalization factor
+    f = (ref_dose * gamma_percentage / 100.0)**2
+
+    # Extract sub-volumes for the evaluation region
+    dose_vol_1_sub = dose_vol_1[np.ix_(iz, iy, ix)]
+
+    print(f"  Gamma criteria: {gamma_percentage}% / {gamma_dist}mm")
+    print(f"  Cutoff: {cut_off*100:.0f}% of max")
+    print(f"  Evaluation region: {dose_vol_1_sub.shape} (from full {dim})")
+    print(f"  Search offsets: {N_offsets}")
+
+    t_start = time.time()
+    gammamap_s = None
+
+    for k in range(N_offsets):
+        if k % 50 == 0:
+            print_progress_bar(k, N_offsets, prefix='Gamma', elapsed=time.time() - t_start)
+
+        # Shifted indices, clamped to valid range
+        ixx2 = np.clip(ix + xx_ind[k], 0, dim[2] - 1)
+        iyy2 = np.clip(iy + yy_ind[k], 0, dim[1] - 1)
+        izz2 = np.clip(iz + zz_ind[k], 0, dim[0] - 1)
+
+        # Extract shifted dose_vol_2
+        tmp2d = dose_vol_2[np.ix_(izz2, iyy2, ixx2)]
+
+        # Dose difference term (squared, normalized)
+        tmp3 = (dose_vol_1_sub - tmp2d)**2 / f
+
+        # Combined gamma squared: (dose_diff^2/f + dist^2/gamma_dist^2) / max(dist^2/gamma_dist^2, 1)
+        tmp4 = (tmp3 + dr2[k]) / dr2b[k]
+
+        if gammamap_s is None:
+            gammamap_s = tmp4.copy()
+        else:
+            np.minimum(gammamap_s, tmp4, out=gammamap_s)
+
+    print_progress_bar(N_offsets, N_offsets, prefix='Gamma', elapsed=time.time() - t_start)
+    elapsed = time.time() - t_start
+    print(f"  Gamma computation completed in {elapsed:.1f}s")
+
+    # Evaluate pass rate on voxels above cutoff
+    dose_vol_2_sub = dose_vol_2[np.ix_(iz, iy, ix)]
+    eval_mask = (dose_vol_1_sub > ref_dose * cut_off) | (dose_vol_2_sub > ref_dose * cut_off)
+    eval_values = gammamap_s[eval_mask]
+
+    N_eval = len(eval_values)
+    N_pass = np.sum(eval_values <= 1.0)
+    pass_rate = (N_pass / N_eval * 100.0) if N_eval > 0 else 0.0
+
+    # Take sqrt to get actual gamma values
+    gammamap_s = np.sqrt(gammamap_s)
+
+    # Zero out regions below threshold
+    gammamap_s[(dose_vol_1_sub <= ref_dose * cut_off) & (dose_vol_2_sub <= ref_dose * cut_off)] = 0.0
+
+    # Place back into full-size array
+    gamma_map = np.zeros(dim, dtype=np.float32)
+    gamma_map[np.ix_(iz, iy, ix)] = gammamap_s
+
+    return gamma_map, pass_rate
