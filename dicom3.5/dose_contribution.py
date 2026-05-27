@@ -81,6 +81,21 @@ def voxel_coordinates(volume, spacing, origin):
     
     return z,y,x 
 
+# need to fix later
+def rtdose_voxel_centers(dose_ds):
+    """Return z, y, x center coordinates in mm (patient coords)."""
+    origin = np.array(dose_ds.ImagePositionPatient, float)
+    dy, dx = [float(x) for x in dose_ds.PixelSpacing]
+    z_off = np.array(dose_ds.GridFrameOffsetVector, float)
+    ny, nx = dose_ds.Rows, dose_ds.Columns
+
+    # z of each frame: IPP_z + offset[k]; pick corner vs center per your vendor
+    z = origin[2] + z_off  # or + 0.5 * dz if offsets are to slice centers
+    y = origin[1] + (np.arange(ny) + 0.5) * dy
+    x = origin[0] + (np.arange(nx) + 0.5) * dx
+    
+    return z, y, x, (dx, dy, np.median(np.diff(z_off)) if len(z_off) > 1 else 1.0)
+
 def beta_0(r, L):
     """
     Calculate the beta angle for r = 1 cm and theta = 90, which can be used as a constant value in the G_L function for theta = 0.

@@ -1,9 +1,23 @@
+# Python cache
 __pycache__/
 *.pyc
-*.pyo
-*.egg-info/
-dist/
-build/
-.env
-.venv/
-*.spec
+
+# NumPy arrays
+*.npy
+
+# Images
+*.png
+*.jpg
+*.jpeg
+
+# DICOM files
+*.dcm
+
+# Medical imaging outputs
+*.mha
+*.nii
+*.nii.gz
+
+# Large generated data
+*.raw
+*.bin
