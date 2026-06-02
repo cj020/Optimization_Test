@@ -98,9 +98,9 @@ def rtdose_voxel_centers(dose_ds):
 
 def beta_0(r, L):
     """
-    Calculate the beta angle for r = 1 cm and theta = 90, which can be used as a constant value in the G_L function for theta = 0.
+    Calculate the beta angle for r = 1 cm and theta = 90 deg , which can be used as a constant value in the G_L function.
     """
-    # For r = 1 cm and theta = 90, the voxel position is directly in front of the source along the direction vector, so the beta angle can be calculated using the geometry of the source and the voxel position. Assuming the source is centered at the origin and extends from -L/2 to L/2 along the z-axis, the end point of the source closest to the voxel is at (0, 0, L/2) if cos_dir_from_dwell_to_voxel >= 0, or (0, 0, -L/2) if cos_dir_from_dwell_to_voxel < 0. The vector from this end point to the voxel position (which is at (0, 0, r)) is then (0, 0, r - L/2) or (0, 0, r + L/2), respectively. The vector from the middle of the source to the voxel position is (0, 0, r). The beta angle can then be calculated as the angle between these two vectors.
+    # For r = 1 cm and theta = 90 deg, the voxel position is directly in front of the source along the direction vector, so the beta angle can be calculated using the geometry of the source and the voxel position. Assuming the source is centered at the origin and extends from -L/2 to L/2 along the z-axis, the end point of the source closest to the voxel is at (0, 0, L/2) if cos_dir_from_dwell_to_voxel >= 0, or (0, 0, -L/2) if cos_dir_from_dwell_to_voxel < 0. The vector from this end point to the voxel position (which is at (0, 0, r)) is then (0, 0, r - L/2) or (0, 0, r + L/2), respectively. The vector from the middle of the source to the voxel position is (0, 0, r). The beta angle can then be calculated as the angle between these two vectors.
 
     end_point_1_L = (L/2, 0, 0) # end point of the source closest to the voxel for theta = 0 in (x, y, z) format
     end_point_2_L = (-L/2, 0, 0) # end point of the source farthest from the voxel for theta = 0 in (x, y, z) format
@@ -521,8 +521,8 @@ def dose_contribution(dwell_pos, norm_dwell_dir, dwell_times, volume, spacing, o
     # Pre-compute 1D voxel coordinates once (sorted, for searchsorted in bounding-box)
     voxel_z, voxel_y, voxel_x = voxel_coordinates(volume, spacing, origin) # get the coordinates of the center of each voxel in the volume
     
-    beta0 = beta_0(r=10, L=L) # pre-calculate the beta angle at theta = 0, r = 1 cm.
-    GLref  = G_L(r=10, L=L, beta=beta0, theta=np.pi/2) # geometry function at theta = 90
+    beta0 = beta_0(r=10, L=L) # pre-calculate the beta angle at theta = 90 deg, r = 1 cm.
+    GLref  = G_L(r=10, L=L, beta=beta0, theta=np.pi/2) # geometry function at theta = 90 deg
     
     total_dose = np.zeros((nz, ny, nx), dtype=np.float64)
     n_dwells = len(dwell_pos)
