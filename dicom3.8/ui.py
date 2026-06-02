@@ -7,7 +7,25 @@ width = 100
 vmin = level - width / 2
 vmax = level + width / 2
 
-def start_ui(volume, spacing, origin, dwell_positions):
+def _can_show_interactive():
+    return "agg" not in plt.get_backend().lower()
+
+def start_ui(volume, spacing, origin, dwell_positions, show=None):
+    """
+    CT slice viewer with dwell positions overlaid.
+
+    Parameters
+    ----------
+    show : bool or None
+        If None, opens the viewer only when matplotlib has a GUI backend.
+        If False, skip the viewer (e.g. batch runs with Agg).
+    """
+    if show is None:
+        show = _can_show_interactive()
+    if not show:
+        print("CT viewer skipped (non-interactive backend). Pass show=True with a GUI backend to enable.")
+        return
+
     z_max = volume.shape[0] 
 
     fig, ax = plt.subplots() 

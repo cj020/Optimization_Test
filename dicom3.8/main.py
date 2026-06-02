@@ -43,6 +43,7 @@ def main():
     print(f"Total irradiation time: {np.sum(dwell_times):.2f} s")
     print(f"Non-zero dwell positions: {np.sum(dwell_times > 0)}")
 
+    # skip interactive CT viewer when using Agg (batch / headless runs)
     start_ui(volume, spacing, origin, dwell_positions)
     
     # Get RTDOSE grid info for computing on same grid
@@ -58,6 +59,7 @@ def main():
 
     nz_d, ny_d, nx_d = rtdose.shape
     dose_spacing = (dx_dose, dy_dose, dz_dose)
+    dose_ref = rtdose.astype(np.float32)
 
     # Voxel center coordinates on the RTDOSE grid
     ref_x = np.arange(nx_d) * dx_dose + dose_origin[0]
@@ -74,7 +76,7 @@ def main():
     print("TG-43 DOSE CALCULATION (on RTDOSE grid)")
     print("="*60)
 
-    total_dose = dc.dose_contribution(
+    total_dose_cgy = dc.dose_contribution(
         dwell_pos=dwell_positions,
         norm_dwell_dir=norm_dwell_direction,
         dwell_times=dwell_times,
@@ -86,14 +88,17 @@ def main():
         Lambda=Lambda
     )
 
-    print(f"\nCalculated dose shape: {total_dose.shape}")
-    print(f"Max calculated dose: {np.max(total_dose):.6f} cGy")
-    nonzero_mask = total_dose > 0
-    if np.any(nonzero_mask):
-        print(f"Mean calculated dose (non-zero): {np.mean(total_dose[nonzero_mask]):.6f} cGy")
+    # TG-43 output is in cGy; RTDOSE is in Gy — convert for comparison
+    dose_calc = (total_dose_cgy / 100.0).astype(np.float32)
 
-    # Reference dose from native RTDOSE (Gy). Gamma uses relative dose, so units vs cGy calc are OK.
-    dose_ref = rtdose.astype(np.float32)
+    print(f"\nCalculated dose shape: {dose_calc.shape}")
+    print(f"Max calculated dose: {np.max(dose_calc):.6f} Gy")
+    nonzero_mask = dose_calc > 0
+    if np.any(nonzero_mask):
+        print(f"Mean calculated dose (non-zero): {np.mean(dose_calc[nonzero_mask]):.6f} Gy")
+    if np.max(dose_ref) > 0:
+        print(f"Max dose ratio (calc/ref): {np.max(dose_calc) / np.max(dose_ref):.3f}")
+
     print(f"\nMax reference dose (native RTDOSE): {np.max(dose_ref):.6f} Gy")
     print(f"Mean reference dose (non-zero): {np.mean(dose_ref[dose_ref > 0]):.6f} Gy")
     
@@ -102,9 +107,10 @@ def main():
     print("GAMMA INDEX COMPARISON (3%/3mm)")
     print("="*60)
 
+    # dose_vol_1 = reference (TPS), dose_vol_2 = evaluation (TG-43)
     gamma, pass_rate = dc.gamma_index_3d(
-        dose_vol_1=total_dose,  # calculated dose in cGy
-        dose_vol_2=dose_ref,    # reference dose in Gy (relative dose comparison)
+        dose_vol_1=dose_ref,    # reference dose in Gy (relative dose comparison)
+        dose_vol_2=dose_calc,   # calculated dose in cGy
         spacing=dose_spacing,
         gamma_dist=3.0,
         gamma_percentage=3.0,
@@ -129,7 +135,7 @@ def main():
 
     # Normalize for display
     rel_ref_display = dose_ref / np.max(dose_ref) * 100.0
-    rel_calc_display = total_dose / np.max(total_dose) * 100.0 if np.max(total_dose) > 0 else total_dose
+    rel_calc_display = dose_calc / np.max(dose_calc) * 100.0 if np.max(dose_calc) > 0 else dose_calc
 
     ax = axes[0, 0]
     im = ax.imshow(rel_ref_display[best_z], cmap='jet', aspect='equal', vmin=0, vmax=100)
@@ -181,7 +187,7 @@ def main():
     print(f"\nComparison figure saved to: gamma_comparison.png")
 
     # Save the dose arrays for further analysis
-    np.save('dose_calculated_tg43.npy', total_dose)
+    np.save('dose_calculated_tg43.npy', dose_calc)
     np.save('dose_reference_rtdose.npy', dose_ref)
     np.save('gamma_map.npy', gamma)
     print("Dose arrays saved to .npy files.")
