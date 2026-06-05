@@ -92,15 +92,33 @@ def main():
     dose_calc = (total_dose_cgy / 100.0).astype(np.float32)
 
     print(f"\nCalculated dose shape: {dose_calc.shape}")
-    print(f"Max calculated dose: {np.max(dose_calc):.6f} Gy")
+    print(f"Max calculated dose (raw): {np.max(dose_calc):.6f} Gy")
     nonzero_mask = dose_calc > 0
     if np.any(nonzero_mask):
         print(f"Mean calculated dose (non-zero): {np.mean(dose_calc[nonzero_mask]):.6f} Gy")
-    if np.max(dose_ref) > 0:
-        print(f"Max dose ratio (calc/ref): {np.max(dose_calc) / np.max(dose_ref):.3f}")
-
+    
     print(f"\nMax reference dose (native RTDOSE): {np.max(dose_ref):.6f} Gy")
     print(f"Mean reference dose (non-zero): {np.mean(dose_ref[dose_ref > 0]):.6f} Gy")
+    
+
+    # Detect RTDOSE pixel saturation (uint32 max → dose clipped at storage limit)
+    sat_mask = None
+    pixel_arr = dose_ds.pixel_array
+    dtype_max = np.iinfo(pixel_arr.dtype).max if np.issubdtype(pixel_arr.dtype, np.integer) else None
+    if dtype_max is not None:
+        n_saturated = int(np.sum(pixel_arr >= dtype_max))
+        if n_saturated > 0:
+            dose_cap = float(dtype_max) * float(dose_ds.DoseGridScaling)
+            print(f"\n  WARNING: RTDOSE pixel saturation detected!")
+            print(f"    {n_saturated} voxels at {pixel_arr.dtype} max ({dtype_max})")
+            print(f"    Reference dose clipped at {dose_cap:.4f} Gy")
+            print(f"    Capping calculated dose at same level for fair comparison")
+            sat_mask = (dose_ref >= dose_cap * 0.999)
+            dose_calc = np.minimum(dose_calc, dose_cap)
+            print(f"    Max calculated dose (capped): {np.max(dose_calc):.6f} Gy")
+
+    if np.max(dose_ref) > 0:
+        print(f"Max dose ratio (calc/ref): {np.max(dose_calc) / np.max(dose_ref):.3f}")
     
     # Gamma index comparison
     print("\n" + "="*60)
@@ -108,13 +126,15 @@ def main():
     print("="*60)
 
     # dose_vol_1 = reference (TPS), dose_vol_2 = evaluation (TG-43)
+    # Both volumes in Gy — absolute dose comparison with global normalization
     gamma, pass_rate = dc.gamma_index_3d(
         dose_vol_1=dose_ref,    # reference dose in Gy (relative dose comparison)
         dose_vol_2=dose_calc,   # calculated dose in cGy
         spacing=dose_spacing,
         gamma_dist=3.0,
         gamma_percentage=3.0,
-        cut_off=0.1
+        cut_off=0.1,
+        sat_mask=sat_mask
     )  
 
     print(f"\n{'='*60}")

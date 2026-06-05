@@ -343,6 +343,14 @@ def extract_dwell_points_with_dwell_time_and_direction(rtplan, local_directions 
                 channel_num = channel.ChannelNumber
                 channel_time = float(getattr(channel, "ChannelTotalTime", 1.0))
 
+                # Final CumulativeTimeWeight for normalization.
+                # ChannelTotalTime is the actual total treatment time; CWT values
+                # must be divided by w_final so dwell times sum to ChannelTotalTime.
+                w_final = float(getattr(cps[-1], "CumulativeTimeWeight", 1.0))
+                if w_final <= 0:
+                    w_final = 1.0
+
+                
                 # Compute global direction (first to last control point) for the entire channel, as a fallback if local direction is not calculated
                 cp_first = cps[0]
                 cp_last = cps[len(cps) - 1]
@@ -356,7 +364,7 @@ def extract_dwell_points_with_dwell_time_and_direction(rtplan, local_directions 
 
                 # Print channel header
                 print(f"\n{'-'*80}")
-                print(f"  Channel {channel_num}  |  ChannelTotalTime = {channel_time:.4f} s")
+                print(f"  Channel {channel_num}  |  ChannelTotalTime = {channel_time:.4f} s  |  CWT_final = {w_final:.4f}")                
                 print(f"{'-'*80}")
                 print(f"  {'#':<5} {'X (mm)':>9} {'Y (mm)':>9} {'Z (mm)':>9}"
                       f"  {'TimeWeight':>11} {'Irrad. Time (s)':>16}"
@@ -386,7 +394,7 @@ def extract_dwell_points_with_dwell_time_and_direction(rtplan, local_directions 
                         time_weight = None
                         dwell_time = None
                     else:
-                        time_weight = w2 - w1
+                        time_weight = (w2 - w1) / w_final
                         dwell_time = time_weight * channel_time
                  
                     # Direction calculation ---if local direction

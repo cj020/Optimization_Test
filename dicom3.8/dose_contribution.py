@@ -70,20 +70,21 @@ F_interp = RegularGridInterpolator(
 
 def voxel_coordinates(volume, spacing, origin):
     """Calculate the coordinates of the center of each voxel in the volume.
-    Returns z, y, x arrays in mm (world coordinates)."""
+    Returns z, y, x arrays in mm (world coordinates).
+    DICOM ImagePositionPatient already gives the center of voxel (0,0,0)."""
     
     nz, ny, nx = volume.shape
     
     # Create a grid of voxel coordinates
-    z = (np.arange(nz) + 0.5) * spacing[2] + origin[2]  # z coordinates of voxel centers (si +0.5) in mm
-    y = (np.arange(ny) + 0.5) * spacing[1] + origin[1]
-    x = (np.arange(nx) + 0.5) * spacing[0] + origin[0]
+    z = np.arange(nz) * spacing[2] + origin[2]
+    y = np.arange(ny) * spacing[1] + origin[1]
+    x = np.arange(nx) * spacing[0] + origin[0]
     
-    return z,y,x 
+    return z, y, x 
 
-# need to fix later
 def rtdose_voxel_centers(dose_ds):
-    """Return z, y, x center coordinates in mm (patient coords)."""
+    """Return z, y, x center coordinates in mm (patient coords).
+    DICOM ImagePositionPatient already gives the center of voxel (0,0,0)."""
     origin = np.array(dose_ds.ImagePositionPatient, float)
     dy, dx = [float(x) for x in dose_ds.PixelSpacing]
     z_off = np.array(dose_ds.GridFrameOffsetVector, float)
@@ -91,8 +92,8 @@ def rtdose_voxel_centers(dose_ds):
 
     # z of each frame: IPP_z + offset[k]; pick corner vs center per your vendor
     z = origin[2] + z_off  # or + 0.5 * dz if offsets are to slice centers
-    y = origin[1] + (np.arange(ny) + 0.5) * dy
-    x = origin[0] + (np.arange(nx) + 0.5) * dx
+    y = origin[1] + np.arange(ny) * dy
+    x = origin[0] + np.arange(nx) * dx
     
     return z, y, x, (dx, dy, np.median(np.diff(z_off)) if len(z_off) > 1 else 1.0)
 
@@ -480,7 +481,7 @@ def print_progress_bar(current, total, bar_length=40, prefix='', suffix='', elap
     """Print a progress bar to stdout."""
     fraction = current / total if total > 0 else 0
     filled = int(bar_length * fraction)
-    bar = '█' * filled + '░' * (bar_length - filled)
+    bar = '#' * filled + '-' * (bar_length - filled)
     pct = 100.0 * fraction
 
     eta_str = ''
@@ -562,22 +563,25 @@ def dose_contribution(dwell_pos, norm_dwell_dir, dwell_times, volume, spacing, o
 
     return total_dose.astype(np.float32)
 
-def gamma_index_3d(dose_vol_1, dose_vol_2, spacing, gamma_dist=3.0, gamma_percentage=3.0, cut_off=0.1, ref_dose=None):
+def gamma_index_3d(dose_vol_1, dose_vol_2, spacing, gamma_dist=3.0, gamma_percentage=3.0, cut_off=0.1, ref_dose=None, sat_mask=None):
     """
     3D gamma analysis based on Daniel A. Low 1998 Med Phys paper.
-    Vectorized Python implementation of the MATLAB gamma3D_general function.
-
-    Uses RELATIVE dose: both volumes are normalized to their respective maxima.
+    
+    Both volumes are expected in the same absolute units (e.g. Gy).
+    Dose-difference criterion is global: percentage of ref_dose.
 
     Parameters
     ----------
-    dose_vol_1 : array (nz, ny, nx) — reference dose volume (any units)
-    dose_vol_2 : array (nz, ny, nx) — evaluation dose volume (same shape)
+    dose_vol_1 : array (nz, ny, nx) — reference dose volume
+    dose_vol_2 : array (nz, ny, nx) — evaluation dose volume (same shape & units)
     spacing : tuple (dx, dy, dz) — voxel sizes in mm
     gamma_dist : float — distance-to-agreement criterion in mm
     gamma_percentage : float — dose difference criterion in %
     cut_off : float — fraction of ref_dose below which voxels are excluded (0-1)
-    ref_dose : float or None — normalization dose; if None, uses max of dose_vol_1
+    ref_dose : float or None — global normalization dose for % criterion;
+               if None, uses max of dose_vol_1
+    sat_mask : array (bool) or None — True for saturated reference voxels to
+               exclude from pass-rate evaluation
 
     Returns
     -------
@@ -589,24 +593,19 @@ def gamma_index_3d(dose_vol_1, dose_vol_2, spacing, gamma_dist=3.0, gamma_percen
         print("  ERROR: Matrix sizes do not match.")
         return np.zeros(dose_vol_1.shape, dtype=np.float32), 0.0
     
-    # Normalize to relative dose using robust normalization
-    # Use 99.9th percentile to avoid near-source hot spot singularities
     nonzero_1 = dose_vol_1[dose_vol_1 > 0]
     nonzero_2 = dose_vol_2[dose_vol_2 > 0]
 
     if len(nonzero_1) == 0 or len(nonzero_2) == 0:
         print("  WARNING: One of the dose distributions is all zeros.")
         return np.zeros(dose_vol_1.shape, dtype=np.float32), 0.0
-    
-    norm_1 = np.percentile(nonzero_1, 99.9)
-    norm_2 = np.percentile(nonzero_2, 99.9)
-
-    dose_vol_1 = np.clip(dose_vol_1 / norm_1, 0, None).astype(np.float32)
-    dose_vol_2 = np.clip(dose_vol_2 / norm_2, 0, None).astype(np.float32)
-
-    print(f"  Using RELATIVE dose normalization (99.9th percentile):")
-    print(f"    Volume 1: norm={norm_1:.4f}, max after norm={np.max(dose_vol_1):.4f}")
-    print(f"    Volume 2: norm={norm_2:.4f}, max after norm={np.max(dose_vol_2):.4f}")
+       
+    dose_vol_1 = dose_vol_1.astype(np.float32)
+    dose_vol_2 = dose_vol_2.astype(np.float32)
+ 
+    print(f"  Using ABSOLUTE dose comparison (both volumes in same units):")
+    print(f"    Volume 1 (ref):  max={np.max(dose_vol_1):.4f}, mean(>0)={np.mean(nonzero_1):.4f}")
+    print(f"    Volume 2 (eval): max={np.max(dose_vol_2):.4f}, mean(>0)={np.mean(nonzero_2):.4f}")
 
     voxel_sizes = np.array([float(spacing[0]), float(spacing[1]), float(spacing[2])])
 
@@ -669,9 +668,19 @@ def gamma_index_3d(dose_vol_1, dose_vol_2, spacing, gamma_dist=3.0, gamma_percen
     print(f"  Evaluation region: {dose_vol_1_sub.shape} (from full {dim})")
     print(f"  Search offsets: {N_offsets}")
 
-    # Pre-compute evaluation mask for early termination
+    # Pre-compute evaluation mask
     dose_vol_2_sub = dose_vol_2[np.ix_(iz, iy, ix)]
     eval_mask = (dose_vol_1_sub > ref_dose * cut_off) | (dose_vol_2_sub > ref_dose * cut_off)
+
+    # Exclude saturated reference voxels from evaluation (unreliable due to clipping)
+    if sat_mask is not None:
+        sat_sub = sat_mask[np.ix_(iz, iy, ix)]
+        n_sat = int(np.sum(sat_sub & eval_mask))
+        if n_sat > 0:
+            print(f"  Excluding {n_sat} saturated reference voxels from evaluation")
+            eval_mask = eval_mask & ~sat_sub
+
+    print(f"  Evaluated voxels: {int(np.sum(eval_mask))}")
 
     t_start = time.time()
     gammamap_s = None
