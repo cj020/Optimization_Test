@@ -567,19 +567,19 @@ def dose_contribution(dwell_pos, norm_dwell_dir, dwell_times, volume, spacing, o
     # Build argument list for active dwells only
     work_items = []
     for i in range(n_dwells):
-        if not active_mask[i]:
+        if not active_mask[i]: # Skip inactive dwells
             continue
         work_items.append((
             dwell_pos[i], norm_dwell_dir[i], dwell_times[i],
             voxel_z, voxel_y, voxel_x,
             L, S_k, Lambda, GLref
-        ))
+        )) # This creates a tuple containing everything needed for one dwell.
     
     if n_workers > 1 and active_dwells > 1:
         # Parallel execution
-        with Pool(processes=n_workers) as pool:
+        with Pool(processes=n_workers) as pool: # This creates a multiprocessing pool.
             results = []
-            for result in pool.imap_unordered(_worker_single_dwell, work_items):
+            for result in pool.imap_unordered(_worker_single_dwell, work_items): # imap.unordered is used to run the same function on many inputs in parallel, and return results as soon as each worker finishes, the order does not matter.
                 results.append(result)
                 print_progress_bar(len(results), active_dwells,
                                    prefix='Dose calc', elapsed=time.time() - t_start)
