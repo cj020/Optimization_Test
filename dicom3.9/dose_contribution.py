@@ -502,7 +502,7 @@ def print_progress_bar(current, total, bar_length=40, prefix='', suffix='', elap
 
 def _worker_single_dwell(args):
     """Worker function for multiprocessing pool.
-    Computes dose for one dwell and returns (dose_sub, iz0, iy0, ix0, time_factor)."""
+    Computes dose for one dwell and returns (dose_sub, iz0, iy0, ix0)."""
     (dwell_pos_i, norm_dir_i, dwell_time_i,
      voxel_z, voxel_y, voxel_x,
      L, S_k, Lambda, GLref) = args
