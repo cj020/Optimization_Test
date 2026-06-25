@@ -529,14 +529,14 @@ def parse_rtstruct(rtstruct):
     for roi in rtstruct.StructureSetROISequence:
         roi_name_map[int(roi.ROINumber)] = roi.ROIName
 
-    # Build lookup: Referenced ROI Number → interpreted type
+    # Build lookup: Referenced ROI Number → interpreted type, such as PTV, organ.
     roi_type_map = {}
     obs_seq = getattr(rtstruct, "RTROIObservationsSequence", [])
     for obs in obs_seq:
         ref_num = int(obs.ReferencedROINumber)
         roi_type_map[ref_num] = getattr(obs, "RTROIInterpretedType", "")
 
-    # Build lookup: Referenced ROI Number → color
+    # Build lookup: Referenced ROI Number → color. It is used mainly for visualization (drawing prostate, bladder, rectum with different colors).
     roi_color_map = {}
     contour_seq = getattr(rtstruct, "ROIContourSequence", [])
     for roi_contour in contour_seq:
@@ -557,6 +557,8 @@ def parse_rtstruct(rtstruct):
             n_pts = int(contour_item.NumberOfContourPoints)
             raw = np.array(contour_item.ContourData, dtype=float).reshape(-1, 3)
             z_val = float(raw[0, 2])
+            
+            # get the coordinate of the point on the contour with z
             contours.append({
                 "z": z_val,
                 "points": raw[:, :2],   # (N, 2) — x, y only
