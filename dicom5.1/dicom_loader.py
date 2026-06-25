@@ -496,7 +496,7 @@ def get_source_strength(rtplan):
 # ============================================================================
 
 # Name fragments that suggest a target volume (case-insensitive matching)
-_TARGET_NAME_HINTS = ("ptv", "ctv", "gtv", "target", "itv", "igtv")
+_TARGET_NAME_HINTS = ("ptv", "ctv", "gtv", "target", "itv", "igtv",  "prostate")
 # Name fragments commonly associated with OAR
 _OAR_NAME_HINTS = (
     "bladder", "rectum", "bowel", "sigmoid", "femur", "femoral",
@@ -580,21 +580,26 @@ def classify_structure(structure):
     """
     Classify a structure as "PTV", "OAR", or "OTHER".
 
-    Uses the DICOM RTROIInterpretedType first; falls back to name heuristics.
+    Explicit DICOM types (PTV/CTV/GTV) are authoritative.  For generic
+    types like "ORGAN", name-based heuristics decide — e.g. "Prostate"
+    is treated as a target in brachytherapy even though its DICOM type
+    is ORGAN.
     """
     itype = structure["interpreted_type"].upper().strip()
     name_lower = structure["name"].lower()
 
-    # DICOM type tag is authoritative when present
+    # Explicit target DICOM types are always PTV
     if itype in ("PTV", "CTV", "GTV"):
         return "PTV"
-    if itype in ("ORGAN", "AVOIDANCE", "OAR"):
-        return "OAR"
 
-    # Name-based fallback
+    # Name-based target hints override generic DICOM types like "ORGAN"
     for hint in _TARGET_NAME_HINTS:
         if hint in name_lower:
             return "PTV"
+    
+    if itype in ("ORGAN", "AVOIDANCE", "OAR"):
+        return "OAR"
+
     for hint in _OAR_NAME_HINTS:
         if hint in name_lower:
             return "OAR"
@@ -710,5 +715,5 @@ def build_structure_masks(structures, grid_origin, grid_spacing, grid_shape, cla
               f"— {len(s['contours'])} contour slices ...")
         masks[s["name"]] = contour_to_mask(s, grid_origin, grid_spacing, grid_shape)
         n_voxels = int(masks[s["name"]].sum())
-        print(f"    → {n_voxels} voxels in mask")
+        print(f"    -> {n_voxels} voxels in mask")
     return masks
