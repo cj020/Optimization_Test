@@ -6,6 +6,7 @@ from dicom_loader import (
     identify_structures,
     build_structure_masks,
 )
+from needle_mesh import mesh_needle_in_ptv
 
 def main():
     # Patient folder may contain two RTDOSE objects (native TPS + resampled on CT grid).
@@ -47,7 +48,7 @@ def main():
     # 2. Parse RTSTRUCT — PTV and OAR on the CT grid
     # ------------------------------------------------------------------
     print(f"\n{'='*70}")
-    print("STRUCTURE SET (RTSTRUCT → CT grid)")
+    print("STRUCTURE SET (RTSTRUCT on CT grid)")
     print(f"{'='*70}")
 
     if rtstruct is None:
@@ -78,7 +79,7 @@ def main():
 
     # Summary of mask coverage
     voxel_vol_mm3 = float(np.prod(ct_spacing))
-    print(f"\n  {'Structure':<30} {'Class':<6} {'Voxels':>10} {'Volume (cm³)':>14}")
+    print(f"\n  {'Structure':<30} {'Class':<6} {'Voxels':>10} {'Volume (cm3)':>14}")
     print(f"  {'-'*30} {'-'*6} {'-'*10} {'-'*14}")
     for s in structures:
         if s["name"] not in masks:
@@ -87,6 +88,14 @@ def main():
         n_vox = int(m.sum())
         vol_cc = n_vox * voxel_vol_mm3 / 1000.0
         print(f"  {s['name']:<30} {s['classification']:<6} {n_vox:>10} {vol_cc:>14.2f}")
+
+    # Build combined PTV mask (union of all PTV structures)
+    ptv_mask = np.zeros(ct_shape, dtype=bool)
+    for name in ptv_names:
+        if name in masks:
+            ptv_mask |= masks[name]
+    print(f"\n  Combined PTV mask: {int(ptv_mask.sum())} voxels")
+
 
     # ------------------------------------------------------------------
     # 3. Extract dwell information from RTPLAN
@@ -103,7 +112,7 @@ def main():
     if S_k is None:
         print("  WARNING: ReferenceAirKermaRate not found. Using S_k = 1.0")
         S_k = 1.0
-    print(f"\n  Source strength S_k = {S_k:.4f} U (µGy·m²/h)")
+    print(f"\n  Source strength S_k = {S_k:.4f} U (µGy*m2/h)")
 
     dwells, count = extract_dwell_points_with_dwell_time_and_direction(
         rtplan=rtplan, local_directions=False
@@ -123,8 +132,49 @@ def main():
     print(f"  Dwell Y range: [{dwell_positions[:,1].min():.2f}, {dwell_positions[:,1].max():.2f}] mm")
     print(f"  Dwell Z range: [{dwell_positions[:,2].min():.2f}, {dwell_positions[:,2].max():.2f}] mm")
 
+    # 4. Mesh each needle within PTV (+5 mm margin) at 1 mm spacing
     # ------------------------------------------------------------------
-    # 4. RTDOSE (loaded for future reference, not used in optimization)
+    print(f"\n{'='*70}")
+    print("NEEDLE MESHING (PTV + 5 mm margin, 1 mm spacing)")
+    print(f"{'='*70}")
+
+    unique_channels = np.unique(channels)
+    needle_meshes = {}   # channel_id -> mesh_points (K, 3)
+
+    print(f"\n  {'Channel':<10} {'Dwells':>7} {'PTV entry (mm)':>15} "
+          f"{'PTV exit (mm)':>14} {'PTV length':>11} {'Mesh pts':>9} "
+          f"{'Mesh length':>12}")
+    print(f"  {'-'*10} {'-'*7} {'-'*15} {'-'*14} {'-'*11} {'-'*9} {'-'*12}")
+
+    total_mesh_points = 0
+
+    for ch_id in unique_channels:
+        ch_mask = channels == ch_id
+        ch_dwells = dwell_positions[ch_mask]
+
+        mesh_pts, t_entry, t_exit = mesh_needle_in_ptv(
+            ch_dwells, ptv_mask, ct_origin, ct_spacing,
+            margin=5.0, mesh_step=1.0,
+        )
+
+        needle_meshes[int(ch_id)] = mesh_pts
+
+        if len(mesh_pts) == 0:
+            print(f"  {int(ch_id):<10} {len(ch_dwells):>7}   (no PTV intersection)")
+            continue
+
+        ptv_len = t_exit - t_entry
+        mesh_len = np.linalg.norm(mesh_pts[-1] - mesh_pts[0])
+        total_mesh_points += len(mesh_pts)
+
+        print(f"  {int(ch_id):<10} {len(ch_dwells):>7} {t_entry:>15.2f} "
+              f"{t_exit:>14.2f} {ptv_len:>11.2f} {len(mesh_pts):>9} "
+              f"{mesh_len:>12.2f}")
+
+    print(f"\n  Total mesh points across all needles: {total_mesh_points}")
+
+    # ------------------------------------------------------------------
+    # 5. RTDOSE (loaded for future reference, not used in optimization)
     # ------------------------------------------------------------------
     if rtdose is not None:
         print(f"\n{'='*70}")
@@ -136,7 +186,7 @@ def main():
         print("\n  No RTDOSE loaded (optional for optimization).")
 
     # ------------------------------------------------------------------
-    # 5. Summary — all data ready for optimization
+    # 6. Summary — all data ready for optimization
     # ------------------------------------------------------------------
     print(f"\n{'='*70}")
     print("OPTIMIZATION DATA READY")
@@ -145,6 +195,7 @@ def main():
     print(f"  PTV mask(s)      : {ptv_names}")
     print(f"  OAR mask(s)      : {oar_names}")
     print(f"  Dwell positions  : {dwell_positions.shape[0]}")
+    print(f"  Needle meshes    : {len(needle_meshes)} channels, {total_mesh_points} total points")    
     print(f"  Source strength   : {S_k:.4f} U")
     print()
 
