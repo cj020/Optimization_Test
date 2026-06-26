@@ -48,6 +48,7 @@ def main():
     # ------------------------------------------------------------------
     # 2. Parse RTSTRUCT — PTV and OAR on the CT grid
     # ------------------------------------------------------------------
+    
     print(f"\n{'='*70}")
     print("STRUCTURE SET (RTSTRUCT on CT grid)")
     print(f"{'='*70}")
@@ -101,6 +102,7 @@ def main():
     # ------------------------------------------------------------------
     # 3. Extract dwell information from RTPLAN
     # ------------------------------------------------------------------
+    
     print(f"\n{'='*70}")
     print("RTPLAN — DWELL POSITIONS")
     print(f"{'='*70}")
@@ -132,9 +134,11 @@ def main():
     print(f"\n  Dwell X range: [{dwell_positions[:,0].min():.2f}, {dwell_positions[:,0].max():.2f}] mm")
     print(f"  Dwell Y range: [{dwell_positions[:,1].min():.2f}, {dwell_positions[:,1].max():.2f}] mm")
     print(f"  Dwell Z range: [{dwell_positions[:,2].min():.2f}, {dwell_positions[:,2].max():.2f}] mm")
-
+    
+    # ------------------------------------------------------------------
     # 4. Mesh each needle within PTV (+5 mm margin) at 1 mm spacing
     # ------------------------------------------------------------------
+    
     print(f"\n{'='*70}")
     print("NEEDLE MESHING (PTV + 5 mm margin, 1 mm spacing)")
     print(f"{'='*70}")
@@ -177,6 +181,7 @@ def main():
     # ------------------------------------------------------------------
     # 5. TG-43 dose calculation (initial plan dose on CT grid)
     # ------------------------------------------------------------------
+    
     print(f"\n{'='*70}")
     print("TG-43 DOSE CALCULATION (initial plan, on CT grid)")
     print(f"{'='*70}")
@@ -221,6 +226,7 @@ def main():
     # ------------------------------------------------------------------
     # 6. RTDOSE (loaded for future reference, not used in optimization)
     # ------------------------------------------------------------------
+    
     if rtdose is not None:
         print(f"\n{'='*70}")
         print("RTDOSE (loaded for reference — not used in optimization)")
