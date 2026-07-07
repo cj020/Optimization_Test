@@ -523,7 +523,7 @@ def _worker_single_dwell(args):
         dose_sub = dose_sub * np.float32(dwell_time_i / 3600.0)
     return dose_sub, iz0, iy0, ix0
 
-def dose_contribution(dwell_pos, norm_dwell_dir, dwell_times, volume, spacing, origin, L, S_k, Lambda, n_workers=None):
+def dose_contribution(dwell_pos, norm_dwell_dir, dwell_times, volume, spacing, origin, L, S_k, Lambda, n_workers=None, verbose=True):
     """Calculate the dose contribution from all dwell positions to the volume grid.
     
     Parameters
@@ -538,6 +538,7 @@ def dose_contribution(dwell_pos, norm_dwell_dir, dwell_times, volume, spacing, o
     S_k : float — air kerma strength in cGy·cm²/h
     Lambda : float — dose-rate constant in cGy/(h·U)
     n_workers : int or None — number of parallel workers (default: CPU count - 1)
+    verbose : bool — print progress information (default True)
 
     Returns
     -------
@@ -559,8 +560,9 @@ def dose_contribution(dwell_pos, norm_dwell_dir, dwell_times, volume, spacing, o
     if n_workers is None:
         n_workers = max(1, cpu_count() - 1)
 
-    print(f"  Total dwells: {n_dwells}, Active (time > 0): {active_dwells}")
-    print(f"  Using {n_workers} parallel workers")
+    if verbose:
+        print(f"  Total dwells: {n_dwells}, Active (time > 0): {active_dwells}")
+        print(f"  Using {n_workers} parallel workers")
     t_start = time.time() # start time for dose calculation
     # computed = 0 # counter for the number of dwell positions that have been computed for dose contribution
 
@@ -581,15 +583,17 @@ def dose_contribution(dwell_pos, norm_dwell_dir, dwell_times, volume, spacing, o
             results = []
             for result in pool.imap_unordered(_worker_single_dwell, work_items): # imap.unordered is used to run the same function on many inputs in parallel, and return results as soon as each worker finishes, the order does not matter.
                 results.append(result)
-                print_progress_bar(len(results), active_dwells,
-                                   prefix='Dose calc', elapsed=time.time() - t_start)
+                if verbose:
+                    print_progress_bar(len(results), active_dwells,
+                                       prefix='Dose calc', elapsed=time.time() - t_start)
     else:
         # Sequential fallback
         results = []
         for item in work_items:
             results.append(_worker_single_dwell(item))
-            print_progress_bar(len(results), active_dwells,
-                               prefix='Dose calc', elapsed=time.time() - t_start)
+            if verbose:
+                print_progress_bar(len(results), active_dwells, 
+                                   prefix='Dose calc', elapsed=time.time() - t_start)
     
     # Accumulate results into total_dose
     for dose_sub, iz0, iy0, ix0 in results:       
@@ -597,8 +601,9 @@ def dose_contribution(dwell_pos, norm_dwell_dir, dwell_times, volume, spacing, o
             snz, sny, snx = dose_sub.shape
             total_dose[iz0:iz0+snz, iy0:iy0+sny, ix0:ix0+snx] += dose_sub
 
-    elapsed = time.time() - t_start
-    print(f"  Completed in {elapsed:.1f}s ({elapsed/active_dwells:.2f}s per active dwell)")
+    if verbose:
+        elapsed = time.time() - t_start
+        print(f"  Completed in {elapsed:.1f}s ({elapsed/active_dwells:.2f}s per active dwell)")
 
     return total_dose.astype(np.float32)
 

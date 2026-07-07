@@ -9,6 +9,7 @@ from dicom_loader import (
 from needle_mesh import mesh_needle_in_ptv
 from dose_contribution import dose_contribution
 from cost_function import cost_function, print_cost_report
+from ipsa import run_ipsa
 
 def main():
     # Patient folder may contain two RTDOSE objects (native TPS + resampled on CT grid).
@@ -197,7 +198,6 @@ def main():
     print(f"  Total irradiation time     : {initial_dwell_times.sum():.2f} s "
           f"(original: {dwell_times.sum():.2f} s)")
 
-
     total_dose_cgy = dose_contribution(
         dwell_pos=dwell_positions,
         norm_dwell_dir=dwell_directions,
@@ -243,9 +243,72 @@ def main():
     J, breakdown = cost_function(dose_gy, masks, ptv_names, oar_names)
     print_cost_report(J, breakdown)
 
+    # ------------------------------------------------------------------
+    # 7. IPSA dose optimisation (100 iterations)
+    # ------------------------------------------------------------------
+
+    optimized_dwell_times, ipsa_history = run_ipsa(
+        dwell_positions, dwell_directions, initial_dwell_times,
+        initial_dose_gy=dose_gy,
+        masks=masks, ptv_names=ptv_names, oar_names=oar_names,
+        volume=volume, spacing=tuple(ct_spacing), origin=tuple(ct_origin),
+        L=Length_source, S_k=S_k, Lambda=Lambda,
+    )
 
     # ------------------------------------------------------------------
-    # 7. RTDOSE (loaded for future reference, not used in optimization)
+    # 8. Recompute dose with optimised dwell times
+    # ------------------------------------------------------------------
+
+    print(f"\n{'='*70}")
+    print("TG-43 DOSE CALCULATION (optimised dwell times, on CT grid)")
+    print(f"{'='*70}")
+
+    opt_dose_cgy = dose_contribution(
+        dwell_pos=dwell_positions,
+        norm_dwell_dir=dwell_directions,
+        dwell_times=optimized_dwell_times,
+        volume=volume,
+        spacing=tuple(ct_spacing),
+        origin=tuple(ct_origin),
+        L=Length_source,
+        S_k=S_k,
+        Lambda=Lambda,
+    )
+
+    opt_dose_gy = opt_dose_cgy / 100.0
+
+    print(f"\n  Dose grid shape : {opt_dose_gy.shape}")
+    print(f"  Max dose        : {opt_dose_gy.max():.4f} Gy")
+    opt_nonzero = opt_dose_gy[opt_dose_gy > 0]
+    if len(opt_nonzero) > 0:
+        print(f"  Mean (>0)       : {opt_nonzero.mean():.4f} Gy")
+        print(f"  Non-zero voxels : {len(opt_nonzero)}")
+
+    print(f"\n  {'Structure':<30} {'Class':<6} "
+          f"{'Dmin (Gy)':>10} {'Dmean (Gy)':>11} {'Dmax (Gy)':>10} {'D95 (Gy)':>10}")
+    print(f"  {'-'*30} {'-'*6} {'-'*10} {'-'*11} {'-'*10} {'-'*10}")
+    for s in structures:
+        if s["name"] not in masks:
+            continue
+        m = masks[s["name"]]
+        n_vox = int(m.sum())
+        if n_vox == 0:
+            print(f"  {s['name']:<30} {s['classification']:<6}   (empty mask)")
+            continue
+        d = opt_dose_gy[m]
+        d95 = float(np.percentile(d, 5))
+        print(f"  {s['name']:<30} {s['classification']:<6} "
+              f"{d.min():>10.4f} {d.mean():>11.4f} {d.max():>10.4f} {d95:>10.4f}")
+
+    # ------------------------------------------------------------------
+    # 9. Cost function evaluation (optimised plan)
+    # ------------------------------------------------------------------
+
+    J_opt, breakdown_opt = cost_function(opt_dose_gy, masks, ptv_names, oar_names)
+    print_cost_report(J_opt, breakdown_opt)
+
+    # ------------------------------------------------------------------
+    # 10. RTDOSE (loaded for future reference, not used in optimization)    # 7. RTDOSE (loaded for future reference, not used in optimization)
     # ------------------------------------------------------------------
     
     if rtdose is not None:
@@ -258,18 +321,19 @@ def main():
         print("\n  No RTDOSE loaded (optional for optimization).")
 
     # ------------------------------------------------------------------
-    # 8. Summary — all data ready for optimization
+    # 11. Summary — all data ready for optimization
     # ------------------------------------------------------------------
     print(f"\n{'='*70}")
-    print("OPTIMIZATION DATA READY")
+    print("SUMMARY")
     print(f"{'='*70}")
     print(f"  CT grid          : {ct_shape}  spacing {tuple(ct_spacing)} mm")
     print(f"  PTV mask(s)      : {ptv_names}")
     print(f"  OAR mask(s)      : {oar_names}")
     print(f"  Dwell positions  : {dwell_positions.shape[0]}")
-    print(f"  Needle meshes    : {len(needle_meshes)} channels, {total_mesh_points} total points")
-    print(f"  Initial dose     : max {dose_gy.max():.4f} Gy (TG-43 on CT grid)")
     print(f"  Source strength   : {S_k:.4f} U")
+    print(f"\n  Initial (uniform) dose : max {dose_gy.max():.4f} Gy   cost J = {J:.2f}")
+    print(f"  Optimised dose         : max {opt_dose_gy.max():.4f} Gy   cost J = {J_opt:.2f}")
+    print(f"  Cost reduction         : {(1 - J_opt / J) * 100:.1f}%")
     print()
 
 
