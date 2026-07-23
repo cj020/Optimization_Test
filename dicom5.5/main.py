@@ -8,7 +8,8 @@ from dicom_loader import (
 )
 from needle_mesh import mesh_needle_in_ptv
 from dose_contribution import dose_contribution
-from cost_function import cost_function, print_cost_report
+from cost_function import cost_function, print_cost_report, PRESCRIPTION_PARAMS
+from plan_evaluation import evaluate_plan, print_evaluation_report
 from ipsa import run_ipsa
 
 def main():
@@ -308,7 +309,18 @@ def main():
     print_cost_report(J_opt, breakdown_opt)
 
     # ------------------------------------------------------------------
-    # 10. RTDOSE (loaded for future reference, not used in optimization)    # 7. RTDOSE (loaded for future reference, not used in optimization)
+    # 10. Clinical plan evaluation (DVH criteria vs prescription)
+    # ------------------------------------------------------------------
+
+    eval_report = evaluate_plan(
+        opt_dose_gy, masks, ptv_names, oar_names,
+        spacing_mm=ct_spacing,
+        D_p=PRESCRIPTION_PARAMS["D_p"],
+    )
+    print_evaluation_report(eval_report, D_p=PRESCRIPTION_PARAMS["D_p"])
+
+    # ------------------------------------------------------------------
+    # 11. RTDOSE (loaded for future reference, not used in optimization)
     # ------------------------------------------------------------------
     
     if rtdose is not None:
@@ -321,7 +333,7 @@ def main():
         print("\n  No RTDOSE loaded (optional for optimization).")
 
     # ------------------------------------------------------------------
-    # 11. Summary — all data ready for optimization
+    # 12. Summary
     # ------------------------------------------------------------------
     print(f"\n{'='*70}")
     print("SUMMARY")
@@ -334,6 +346,14 @@ def main():
     print(f"\n  Initial (uniform) dose : max {dose_gy.max():.4f} Gy   cost J = {J:.2f}")
     print(f"  Optimised dose         : max {opt_dose_gy.max():.4f} Gy   cost J = {J_opt:.2f}")
     print(f"  Cost reduction         : {(1 - J_opt / J) * 100:.1f}%")
+    n_fail = sum(
+        1 for role in eval_report.values()
+        for c in role.get("checks", [])
+        if c["status"] == "FAIL"
+    )
+    n_checks = sum(len(role.get("checks", [])) for role in eval_report.values())
+    print(f"  Clinical criteria      : {n_checks - n_fail}/{n_checks} met "
+          f"({n_fail} failed)")
     print()
 
 
