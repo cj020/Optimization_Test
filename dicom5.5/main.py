@@ -245,7 +245,7 @@ def main():
     print_cost_report(J, breakdown)
 
     # ------------------------------------------------------------------
-    # 7. IPSA dose optimisation (100 iterations)
+    # 7. IPSA dose optimisation (1000 iterations)
     # ------------------------------------------------------------------
 
     optimized_dwell_times, ipsa_history = run_ipsa(

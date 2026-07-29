@@ -8,7 +8,7 @@ from cost_function import cost_function, PRESCRIPTION_PARAMS
 # =====================================================================
 
 IPSA_DEFAULTS = {
-    "n_iterations": 100,
+    "n_iterations": 1000,
     "T_0": None,              # initial temperature (auto-set from initial cost)
     "alpha": 0.985,           # geometric cooling rate per full sweep
     "perturbation_std": None, # std of dwell-time perturbation in seconds (auto-set)
