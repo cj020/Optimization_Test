@@ -24,36 +24,36 @@ def main():
     # 1. Load all DICOM data
     # ------------------------------------------------------------------
 
-    volume, spacing, origin, direction, rtstruct, rtplan, rtdose, dose_ds = load_dicom(folder)
+    volume, spacing, origin, direction, rtstruct, rtplan, rtdose, dose_ds, modality = load_dicom(folder)
 
-    ct_shape = volume.shape          # (nz, ny, nx)
-    ct_spacing = np.array(spacing)   # (dx, dy, dz) mm
-    ct_origin = np.array(origin)     # (x0, y0, z0) mm
+    vol_shape = volume.shape          # (nz, ny, nx)
+    vol_spacing = np.array(spacing)   # (dx, dy, dz) mm
+    vol_origin = np.array(origin)     # (x0, y0, z0) mm
    
     print(f"\n{'='*70}")
-    print("CT VOLUME")
+    print(f"{modality} VOLUME")
     print(f"{'='*70}")
-    print(f"  Shape (nz, ny, nx) : {ct_shape}")
-    print(f"  Spacing (dx,dy,dz) : {ct_spacing} mm")
-    print(f"  Origin  (x0,y0,z0) : {ct_origin} mm")
-    print(f"  HU range           : [{volume.min()}, {volume.max()}]")
+    print(f"  Shape (nz, ny, nx) : {vol_shape}")
+    print(f"  Spacing (dx,dy,dz) : {vol_spacing} mm")
+    print(f"  Origin  (x0,y0,z0) : {vol_origin} mm")
+    print(f"  Value range        : [{volume.min()}, {volume.max()}]")
 
-    # CT voxel-center world coordinates
-    nx, ny, nz = ct_shape[2], ct_shape[1], ct_shape[0]
-    ct_x = ct_origin[0] + np.arange(nx) * ct_spacing[0]
-    ct_y = ct_origin[1] + np.arange(ny) * ct_spacing[1]
-    ct_z = ct_origin[2] + np.arange(nz) * ct_spacing[2]
+    # Voxel-center world coordinates
+    nx, ny, nz = vol_shape[2], vol_shape[1], vol_shape[0]
+    vol_x = vol_origin[0] + np.arange(nx) * vol_spacing[0]
+    vol_y = vol_origin[1] + np.arange(ny) * vol_spacing[1]
+    vol_z = vol_origin[2] + np.arange(nz) * vol_spacing[2]
 
-    print(f"\n  X range: [{ct_x[0]:.2f}, {ct_x[-1]:.2f}] mm  ({nx} voxels)")
-    print(f"  Y range: [{ct_y[0]:.2f}, {ct_y[-1]:.2f}] mm  ({ny} voxels)")
-    print(f"  Z range: [{ct_z[0]:.2f}, {ct_z[-1]:.2f}] mm  ({nz} voxels)")
+    print(f"\n  X range: [{vol_x[0]:.2f}, {vol_x[-1]:.2f}] mm  ({nx} voxels)")
+    print(f"  Y range: [{vol_y[0]:.2f}, {vol_y[-1]:.2f}] mm  ({ny} voxels)")
+    print(f"  Z range: [{vol_z[0]:.2f}, {vol_z[-1]:.2f}] mm  ({nz} voxels)")
   
     # ------------------------------------------------------------------
-    # 2. Parse RTSTRUCT — CTV, PTV, and OAR on the CT grid
+    # 2. Parse RTSTRUCT — CTV, PTV, and OAR on the image grid
     # ------------------------------------------------------------------
     
     print(f"\n{'='*70}")
-    print("STRUCTURE SET (RTSTRUCT on CT grid)")
+    print(f"STRUCTURE SET (RTSTRUCT on {modality} grid)")
     print(f"{'='*70}")
 
     if rtstruct is None:
@@ -73,18 +73,18 @@ def main():
         print(f"  {s['name']:<30} {s['interpreted_type']:<15} "
               f"{s['classification']:<8} {len(s['contours']):>8}")
 
-    # Rasterize CTV, PTV, and OAR masks on the CT grid
-    print(f"\n  Rasterizing structure masks on CT grid {ct_shape} ...")
+    # Rasterize CTV, PTV, and OAR masks on the image grid
+    print(f"\n  Rasterizing structure masks on {modality} grid {vol_shape} ...")
     masks = build_structure_masks(
         structures,
-        grid_origin=ct_origin,
-        grid_spacing=ct_spacing,
-        grid_shape=ct_shape,
+        grid_origin=vol_origin,
+        grid_spacing=vol_spacing,
+        grid_shape=vol_shape,
         classifications=["CTV", "PTV", "OAR"],
     )
 
     # Summary of mask coverage
-    voxel_vol_mm3 = float(np.prod(ct_spacing))
+    voxel_vol_mm3 = float(np.prod(vol_spacing))
     print(f"\n  {'Structure':<30} {'Class':<6} {'Voxels':>10} {'Volume (cm3)':>14}")
     print(f"  {'-'*30} {'-'*6} {'-'*10} {'-'*14}")
     for s in structures:
@@ -97,7 +97,7 @@ def main():
 
     # Needle meshing uses CTV (fall back to PTV if no CTV is present)
     mesh_target_names = ctv_names if ctv_names else ptv_names
-    ptv_mask = np.zeros(ct_shape, dtype=bool)
+    ptv_mask = np.zeros(vol_shape, dtype=bool)
     for name in mesh_target_names:
         if name in masks:
             ptv_mask |= masks[name]
@@ -164,7 +164,7 @@ def main():
         ch_dwells = dwell_positions[ch_mask]
 
         mesh_pts, t_entry, t_exit = mesh_needle_in_ptv(
-            ch_dwells, ptv_mask, ct_origin, ct_spacing,
+            ch_dwells, ptv_mask, vol_origin, vol_spacing,
             margin=5.0, mesh_step=1.0,
         )
 
@@ -185,11 +185,11 @@ def main():
     print(f"\n  Total mesh points across all needles: {total_mesh_points}")
 
     # ------------------------------------------------------------------
-     # 5. TG-43 dose calculation (uniform initial dwell times, on CT grid)
+     # 5. TG-43 dose calculation (uniform initial dwell times, on image grid)
     # ------------------------------------------------------------------
     
     print(f"\n{'='*70}")
-    print("TG-43 DOSE CALCULATION (uniform initial dwell times, on CT grid)")
+    print(f"TG-43 DOSE CALCULATION (uniform initial dwell times, on {modality} grid)")
     print(f"{'='*70}")
 
     active_mask = dwell_times > 0
@@ -207,8 +207,8 @@ def main():
         norm_dwell_dir=dwell_directions,
         dwell_times=initial_dwell_times,
         volume=volume,
-        spacing=tuple(ct_spacing),
-        origin=tuple(ct_origin),
+        spacing=tuple(vol_spacing),
+        origin=tuple(vol_origin),
         L=Length_source,
         S_k=S_k,
         Lambda=Lambda,
@@ -255,7 +255,7 @@ def main():
         dwell_positions, dwell_directions, initial_dwell_times,
         initial_dose_gy=dose_gy,
         masks=masks, ctv_names=ctv_names, oar_names=oar_names,
-        volume=volume, spacing=tuple(ct_spacing), origin=tuple(ct_origin),
+        volume=volume, spacing=tuple(vol_spacing), origin=tuple(vol_origin),
         L=Length_source, S_k=S_k, Lambda=Lambda,
     )
 
@@ -264,7 +264,7 @@ def main():
     # ------------------------------------------------------------------
 
     print(f"\n{'='*70}")
-    print("TG-43 DOSE CALCULATION (optimised dwell times, on CT grid)")
+    print(f"TG-43 DOSE CALCULATION (optimised dwell times, on {modality} grid)")
     print(f"{'='*70}")
 
     opt_dose_cgy = dose_contribution(
@@ -272,8 +272,8 @@ def main():
         norm_dwell_dir=dwell_directions,
         dwell_times=optimized_dwell_times,
         volume=volume,
-        spacing=tuple(ct_spacing),
-        origin=tuple(ct_origin),
+        spacing=tuple(vol_spacing),
+        origin=tuple(vol_origin),
         L=Length_source,
         S_k=S_k,
         Lambda=Lambda,
@@ -317,7 +317,7 @@ def main():
 
     eval_report = evaluate_plan(
         opt_dose_gy, masks, ctv_names, ptv_names, oar_names,
-        spacing_mm=ct_spacing,
+        spacing_mm=vol_spacing,
         D_p=PRESCRIPTION_PARAMS["D_p"],
     )
     print_evaluation_report(eval_report, D_p=PRESCRIPTION_PARAMS["D_p"])
@@ -341,7 +341,7 @@ def main():
     print(f"\n{'='*70}")
     print("SUMMARY")
     print(f"{'='*70}")
-    print(f"  CT grid          : {ct_shape}  spacing {tuple(ct_spacing)} mm")
+    print(f"  {modality} grid          : {vol_shape}  spacing {tuple(vol_spacing)} mm")
     print(f"  CTV mask(s)      : {ctv_names}")
     print(f"  PTV mask(s)      : {ptv_names}")
     print(f"  OAR mask(s)      : {oar_names}")
