@@ -194,8 +194,8 @@ def build_voxel_volume(image_files):
     if len(image_files) == 1 and n_frames > 1:
         ds = pydicom.dcmread(image_files[0])
         arr = ds.pixel_array
-        if arr.ndim == 4 and arr.shape[-1] in (3, 4):
-            arr = np.mean(arr[..., :3], axis=-1)
+        if arr.ndim == 4 and arr.shape[-1] in (3, 4): # handles a different type of image: color/multi-channel frames.
+            arr = np.mean(arr[..., :3], axis=-1) # convert color to grayscale
         if arr.ndim != 3:
             raise ValueError(f"Expected multi-frame volume (nz, ny, nx), got shape {arr.shape}")
         print(f"  Stacked multi-frame volume: {arr.shape}  dtype={arr.dtype}")
@@ -209,10 +209,10 @@ def build_voxel_volume(image_files):
 
     loaded.sort(key=lambda t: t[0])
     shapes = {t[2].shape for t in loaded}
-    if len(shapes) != 1:
+    if len(shapes) != 1: # Check that all slices have the same shape
         raise ValueError(f"Inconsistent slice shapes in image series: {shapes}")
 
-    volume = np.stack([t[2] for t in loaded], axis=0)
+    volume = np.stack([t[2] for t in loaded], axis=0) # (z, y, x)
     datasets = [t[1] for t in loaded]
     print(f"  Stacked {len(datasets)} slices into volume {volume.shape}  dtype={volume.dtype}")
     return volume, datasets
