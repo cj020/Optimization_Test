@@ -187,8 +187,8 @@ def build_voxel_volume(image_files):
     if not image_files:
         raise ValueError("No image files to build volume")
 
-    first = pydicom.dcmread(image_files[0], stop_before_pixels=True)
-    n_frames = int(getattr(first, "NumberOfFrames", 1) or 1)
+    first = pydicom.dcmread(image_files[0], stop_before_pixels=True) # read the first DICOM file
+    n_frames = int(getattr(first, "NumberOfFrames", 1) or 1) # distinguish between a collection of single-frame files and a single multi-frame DICOM file
 
     # Single multi-frame file (some US volumes)
     if len(image_files) == 1 and n_frames > 1:
