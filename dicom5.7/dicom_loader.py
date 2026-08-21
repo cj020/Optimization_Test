@@ -272,12 +272,12 @@ def _slice_spacing_mm(datasets, fallback_ds):
     """Through-plane spacing (mm) from consecutive ImagePositionPatient, else SliceThickness."""
     positions = []
     for ds in datasets:
-        ipp = getattr(ds, "ImagePositionPatient", None)
+        ipp = getattr(ds, "ImagePositionPatient", None) # ImagePositionPatient gives upper-left corner of that image located at that physical position in the DICOM patient coordinate system.
         if ipp is not None:
             positions.append(np.array(ipp, dtype=float))
     if len(positions) >= 2:
-        diffs = [np.linalg.norm(positions[i + 1] - positions[i]) for i in range(len(positions) - 1)]
-        dz = float(np.median(diffs))
+        diffs = [np.linalg.norm(positions[i + 1] - positions[i]) for i in range(len(positions) - 1)] # calculate the distance between consecutive slices
+        dz = float(np.median(diffs)) # use the median spacing
         if dz > 0:
             return dz
     for attr in ("SpacingBetweenSlices", "SliceThickness"):
