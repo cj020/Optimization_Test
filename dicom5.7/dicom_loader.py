@@ -815,8 +815,8 @@ def classify_structure(structure):
     is treated as a CTV in brachytherapy even though its DICOM type
     is ORGAN.
     """
-    itype = structure["interpreted_type"].upper().strip()
-    name_lower = structure["name"].lower()
+    itype = structure["interpreted_type"].upper().strip() # get the interpreted type, remove surrounding spaces, and convert it to uppercase.
+    name_lower = structure["name"].lower() # takes the ROI name and converts it to lowercase.
 
     # Explicit DICOM target types
     if itype == "CTV":
@@ -921,7 +921,7 @@ def contour_to_mask(structure, grid_origin, grid_spacing, grid_shape):
         if abs(z_coords[z_idx] - cz) > z_tolerance:
             continue
 
-        poly_path = Path(pts)
+        poly_path = Path(pts) # create a polygon
         inside = poly_path.contains_points(grid_points).reshape(ny, nx)
         # XOR-accumulate so nested contours (holes) toggle correctly
         mask[z_idx] ^= inside
