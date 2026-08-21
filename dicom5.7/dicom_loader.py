@@ -252,10 +252,10 @@ def _direction_from_orientation(ds):
     if iop is None:
         return (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
     iop = np.array(iop, dtype=float)
-    row_cos = iop[:3]
-    col_cos = iop[3:6]
-    slice_cos = np.cross(row_cos, col_cos)
-    nrm = np.linalg.norm(slice_cos)
+    row_cos = iop[:3] # extract the row direction
+    col_cos = iop[3:6] # extract the column direction
+    slice_cos = np.cross(row_cos, col_cos) # calculate the slice direction with cross product
+    nrm = np.linalg.norm(slice_cos) # normalize the slice direction
     if nrm > 0:
         slice_cos = slice_cos / nrm
     return tuple(float(v) for v in np.concatenate([row_cos, col_cos, slice_cos]))
