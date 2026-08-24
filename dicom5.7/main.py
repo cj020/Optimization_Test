@@ -195,7 +195,7 @@ def main():
     active_mask = dwell_times > 0
     n_active = int(active_mask.sum())
     uniform_time = float(np.mean(dwell_times[active_mask]))
-    initial_dwell_times = np.where(active_mask, uniform_time, 0.0)
+    initial_dwell_times = np.where(active_mask, uniform_time, 0.0) # assign uniform_time to active dwell positions and 0.0 everywhere else
 
     print(f"\n  Active dwell positions     : {n_active}")
     print(f"  Uniform dwell time         : {uniform_time:.4f} s")

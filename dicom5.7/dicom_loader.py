@@ -604,7 +604,7 @@ def extract_dwell_points_with_dwell_time_and_direction(rtplan, local_directions 
 
                 dwell_idx_in_channel = 0 # counter for dwell positions within the current channel
                 
-                for i in range(0, len(cps) - 1, 2):
+                for i in range(0, len(cps) - 1, 2): # loop through cps two elements at a time, starting from index 0
 
                     cp_start = cps[i]
                     cp_end = cps[i + 1]
