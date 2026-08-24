@@ -194,7 +194,7 @@ def main():
     print(f"\n  Total mesh points across all needles: {total_mesh_points}")
 
     # ------------------------------------------------------------------
-     # 5. TG-43 dose calculation (uniform initial dwell times, on image grid)
+    # 5. TG-43 dose calculation (uniform initial dwell times, on image grid)
     # ------------------------------------------------------------------
     
     print(f"\n{'='*70}")
