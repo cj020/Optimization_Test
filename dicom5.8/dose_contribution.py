@@ -531,7 +531,7 @@ def dose_contribution(dwell_pos, norm_dwell_dir, dwell_times, volume, spacing, o
     dwell_pos : array (N, 3) — dwell positions (x, y, z) in mm
     norm_dwell_dir : array (N, 3) — normalized direction vectors
     dwell_times : array (N,) — irradiation time per dwell in seconds
-    volume : array (nz, ny, nx) — CT/dose volume (used for shape only)
+    volume : array (nz, ny, nx) — CT/US dose volume (used for shape only)
     spacing : tuple (dx, dy, dz) in mm
     origin : tuple (x0, y0, z0) in mm
     L : float — active source length in mm

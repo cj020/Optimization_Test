@@ -128,11 +128,11 @@ def cost_function(dose_gy, masks, ctv_names, oar_names, params=None):
     for name in ctv_names:
         if name not in masks:
             continue
-        m = masks[name]
+        m = masks[name] # here m is a Boolean 3-D array: m.shape = (nz, ny, nx)
         n_vox = int(m.sum())
         if n_vox == 0:
             continue
-        d = dose_gy[m]
+        d = dose_gy[m] # extracts only the dose values inside the CTV
         pen = penalty_target(d, D_p, D_max, w_L, w_H)
         struct_cost = float(pen.sum())
         total_cost += struct_cost
