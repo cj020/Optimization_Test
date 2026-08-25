@@ -1,7 +1,7 @@
 """Post-optimization clinical plan evaluation against DVH criteria.
 
 Percentages are relative to the prescription dose D_p (Gy).
-Absolute volumes use the CT voxel size (mm³ → cc).
+Absolute volumes use the image-grid voxel size (mm³ → cc).
 """
 
 import numpy as np

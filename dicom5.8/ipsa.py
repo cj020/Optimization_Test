@@ -93,6 +93,7 @@ def ipsa_optimize(dwell_positions, dwell_directions, current_times,
     }
 
     print(f"\n  IPSA configuration:")
+    print(f"    Grid               : {volume.shape}  spacing {tuple(float(v) for v in spacing)} mm")
     print(f"    Iterations         : {n_iter}")
     print(f"    Active dwells      : {n_active}")
     print(f"    Initial T          : {T:.4f}")
