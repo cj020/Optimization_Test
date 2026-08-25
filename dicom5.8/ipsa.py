@@ -102,7 +102,7 @@ def ipsa_optimize(dwell_positions, dwell_directions, current_times,
     print(f"    Dwell time bounds  : [{t_min:.2f}, {t_max:.2f}] s")
     print(f"    Initial cost       : {J:.2f}")
 
-    t0 = time.time()
+    t0 = time.time() # current time
     n_dwells = len(t)
 
     for iteration in range(n_iter):
@@ -126,7 +126,7 @@ def ipsa_optimize(dwell_positions, dwell_directions, current_times,
         delta_dose_cgy = dose_contribution(
             dwell_pos=dwell_positions,
             norm_dwell_dir=dwell_directions,
-            dwell_times=single_times,
+            dwell_times=single_times, # calculate the difference since dose is approximately linear with dwell time
             volume=volume,
             spacing=spacing,
             origin=origin,
@@ -154,7 +154,7 @@ def ipsa_optimize(dwell_positions, dwell_directions, current_times,
                 best_J = J
                 best_t = t.copy()
 
-        T *= alpha
+        T *= alpha # the annealing temperature decreases
         history["cost"].append(J)
         history["temperature"].append(T)
         history["accept_rate"].append(1.0 if accepted else 0.0)
