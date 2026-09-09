@@ -1,3 +1,4 @@
+import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, Button, TextBox
 from conversion import world_to_voxel
@@ -8,9 +9,24 @@ width = 100
 vmin = level - width / 2
 vmax = level + width / 2
 
+_NON_INTERACTIVE_BACKENDS = {"agg", "pdf", "ps", "svg", "cairo", "template"}
+
+
+def _ensure_interactive_backend():
+    """Switch off a headless backend so plt.show() can open a window."""
+    if matplotlib.get_backend().lower() not in _NON_INTERACTIVE_BACKENDS:
+        return matplotlib.get_backend()
+    for name in ("TkAgg", "QtAgg", "Qt5Agg", "WxAgg"):
+        try:
+            matplotlib.use(name, force=True)
+            return matplotlib.get_backend()
+        except Exception:
+            continue
+    return matplotlib.get_backend()
+
 
 def _can_show_interactive():
-    return "agg" not in plt.get_backend().lower()
+    return matplotlib.get_backend().lower() not in _NON_INTERACTIVE_BACKENDS
 
 
 def _parse_float(text, fallback):
@@ -49,12 +65,16 @@ def start_ui(volume, spacing, origin, dwell_positions, show=None,
     params = copy_prescription_params(initial_params)
     
     if show is None:
+        _ensure_interactive_backend()
         show = _can_show_interactive()
     if not show:
-        print("Image viewer skipped (non-interactive backend). "
-              "Using default cost-function parameters. "
-              "Pass show=True with a GUI backend to enable.")
+        print("Image viewer skipped (non-interactive matplotlib backend: "
+              f"{matplotlib.get_backend()}). Using default cost-function parameters.")
         return params
+
+    print(f"\n  Opening GUI window (backend: {matplotlib.get_backend()}) ...")
+    print("  Edit cost-function parameters, then click Continue.")
+
 
     z_max = volume.shape[0] 
     oar_keys = list(params.get("oar_params", {}).keys())
@@ -226,7 +246,7 @@ def start_ui(volume, spacing, origin, dwell_positions, show=None,
     fig.canvas.mpl_connect("close_event", on_close)
 
     refresh_cost()
-    plt.show() 
+    plt.show(block=True)
 
     # Keep widget references alive until the window closes.
     _ = (slice_slider, boxes, btn_reset, btn_continue)
