@@ -8,14 +8,48 @@ from cost_function import cost_function, PRESCRIPTION_PARAMS
 # =====================================================================
 
 IPSA_DEFAULTS = {
-    "n_iterations": 500,
+    "n_iterations": 500,      # maximum iterations
     "T_0": None,              # initial temperature (auto-set from initial cost)
-    "alpha": 0.985,           # geometric cooling rate per full sweep
+    "alpha": 0.985,           # geometric cooling rate per iteration
     "perturbation_std": None, # std of dwell-time perturbation in seconds (auto-set)
     "t_min": 0.0,             # minimum dwell time (s)
     "t_max": None,            # maximum dwell time (auto-set to 3× max initial)
     "seed": 42,
+    # Stop when two successive accepted costs satisfy
+    # |J_k / J_{k-1} - 1| <= cost_ratio_tol. None disables the test.
+    "cost_ratio_tol": 1e-4,
+    "min_iterations": 1,      # earliest iteration at which the ratio can stop the run
 }
+
+
+# =====================================================================
+# Convergence: ratio of two successive costs
+# =====================================================================
+
+def sequential_cost_ratio(J_current, J_previous):
+    """Return J_current / J_previous for two successive cost values.
+
+    Both costs equal to zero give ratio 1. A zero previous cost with a
+    nonzero current cost gives infinity.
+    """
+    J_current = float(J_current)
+    J_previous = float(J_previous)
+    if abs(J_previous) <= 1e-12:
+        if abs(J_current) <= 1e-12:
+            return 1.0
+        return float("inf")
+    return J_current / J_previous
+
+
+def cost_ratio_converged(J_current, J_previous, tol):
+    """Test |J_current / J_previous - 1| <= tol.
+
+    Returns (converged, ratio). ``tol is None`` leaves the test inactive.
+    """
+    ratio = sequential_cost_ratio(J_current, J_previous)
+    if tol is None or not np.isfinite(ratio):
+        return False, ratio
+    return abs(ratio - 1.0) <= float(tol), ratio
 
 
 # =====================================================================
@@ -52,7 +86,9 @@ def ipsa_optimize(dwell_positions, dwell_directions, current_times,
     Returns
     -------
     optimized_times : (N,) full dwell-time array
-    history : dict with cost / temperature / acceptance history
+    history : dict with cost / temperature / acceptance / cost-ratio history.
+    The run stops early when two successive accepted costs satisfy
+    ``|J_k / J_{k-1} - 1| <= cost_ratio_tol``.
     """
     ip = dict(IPSA_DEFAULTS)
     if ipsa_params:
@@ -74,6 +110,8 @@ def ipsa_optimize(dwell_positions, dwell_directions, current_times,
     sigma_t = ip["perturbation_std"]
     n_iter  = ip["n_iterations"]
     alpha   = ip["alpha"]
+    cost_ratio_tol = ip["cost_ratio_tol"]
+    min_iterations = int(ip["min_iterations"])
     rng     = np.random.default_rng(ip["seed"])
 
     # ---- initial cost ----
@@ -90,6 +128,9 @@ def ipsa_optimize(dwell_positions, dwell_directions, current_times,
         "cost": [J],
         "temperature": [T],
         "accept_rate": [],
+        "cost_ratio": [],
+        "converged": False,
+        "stop_reason": "max_iterations",
     }
 
     print(f"\n  IPSA configuration:")
@@ -100,6 +141,11 @@ def ipsa_optimize(dwell_positions, dwell_directions, current_times,
     print(f"    Cooling rate alpha : {alpha}")
     print(f"    Perturbation std   : {sigma_t:.4f} s")
     print(f"    Dwell time bounds  : [{t_min:.2f}, {t_max:.2f}] s")
+    if cost_ratio_tol is None:
+        print(f"    Cost-ratio stop    : off")
+    else:
+        print(f"    Cost-ratio stop    : |J_k / J_(k-1) - 1| <= {cost_ratio_tol:.3g}"
+              f"  after iteration {min_iterations}")
     print(f"    Initial cost       : {J:.2f}")
 
     t0 = time.time() # current time
@@ -116,6 +162,7 @@ def ipsa_optimize(dwell_positions, dwell_directions, current_times,
             history["cost"].append(J)
             history["temperature"].append(T)
             history["accept_rate"].append(0.0)
+            history["cost_ratio"].append(np.nan)
             T *= alpha
             continue
 
@@ -139,16 +186,20 @@ def ipsa_optimize(dwell_positions, dwell_directions, current_times,
         proposed_dose = dose_gy + sign * delta_dose_gy
 
         # --- evaluate cost on the proposed dose grid ---
+        J_before = J
         J_new, _ = cost_function(proposed_dose, masks, ctv_names, oar_names, rx_params)
         dJ = J_new - J
 
         # --- simulated annealing acceptance ---
         accepted = False
+        ratio = np.nan
+        ratio_met = False
         if dJ < 0 or rng.random() < np.exp(-dJ / max(T, 1e-30)):
             t[i] = t_new
             dose_gy = proposed_dose
             J = J_new
             accepted = True
+            ratio_met, ratio = cost_ratio_converged(J, J_before, cost_ratio_tol)
 
             if J < best_J:
                 best_J = J
@@ -158,19 +209,40 @@ def ipsa_optimize(dwell_positions, dwell_directions, current_times,
         history["cost"].append(J)
         history["temperature"].append(T)
         history["accept_rate"].append(1.0 if accepted else 0.0)
+        history["cost_ratio"].append(ratio)
 
-        if (iteration + 1) % 10 == 0 or iteration == 0 or iteration == n_iter - 1:
+        converged_now = (
+            accepted and ratio_met and (iteration + 1) >= min_iterations
+        )
+        if (iteration + 1) % 10 == 0 or iteration == 0 or converged_now or iteration == n_iter - 1:
             recent_accept = np.mean(history["accept_rate"][-min(10, iteration + 1):])
             elapsed = time.time() - t0
+            ratio_text = f"{ratio:.6f}" if np.isfinite(ratio) else "n/a"
             print(f"    Iter {iteration + 1:>4}/{n_iter}  "
                   f"J={J:>12.2f}  best={best_J:>12.2f}  "
+                  f"ratio={ratio_text}  "
                   f"T={T:.4f}  accept={recent_accept:.0%}  "
                   f"[{elapsed:.1f}s]")
 
+        if converged_now:
+            history["converged"] = True
+            history["stop_reason"] = "cost_ratio"
+            break
+
     elapsed = time.time() - t0
-    print(f"\n  IPSA completed in {elapsed:.1f}s")
-    print(f"  Best cost : {best_J:.2f}  (initial: {history['cost'][0]:.2f})")
-    print(f"  Reduction : {(1 - best_J / history['cost'][0]) * 100:.1f}%")
+    n_run = len(history["accept_rate"])
+    history["n_iterations_run"] = n_run
+    J0 = history["cost"][0]
+    print(f"\n  IPSA completed in {elapsed:.1f}s  ({n_run} iterations)")
+    if history["converged"]:
+        last_ratio = history["cost_ratio"][-1]
+        print(f"  Stopped: |J_k / J_(k-1) - 1| = {abs(last_ratio - 1.0):.3g}"
+              f"  <= {cost_ratio_tol:.3g}")
+    else:
+        print(f"  Stopped: reached the iteration limit ({n_iter})")
+    print(f"  Best cost : {best_J:.2f}  (initial: {J0:.2f})")
+    if abs(J0) > 1e-12:
+        print(f"  Reduction : {(1 - best_J / J0) * 100:.1f}%")
 
     return best_t, history
 
