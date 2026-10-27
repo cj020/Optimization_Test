@@ -242,6 +242,50 @@ def dwell_position_l2(times):
     return float(np.linalg.norm(t))
 
 
+def evaluate_simultaneous_loss(
+    dose_gy,
+    times,
+    masks,
+    ctv_names,
+    oar_names,
+    rx_params=None,
+    loss_params=None,
+):
+    """Evaluate ``L = J_dose + w_l2 * ||t||_2`` on a known dose grid.
+
+    ``times`` may include inactive (non-positive) entries; those are omitted
+    from ``||t||_2``. Negative times are rejected.
+    """
+    params = _resolve_loss_params(loss_params)
+    w_l2 = float(params["w_l2"])
+    if w_l2 < 0.0:
+        raise ValueError("w_l2 must be >= 0.")
+
+    times = np.asarray(times, dtype=np.float64).reshape(-1)
+    if np.any(times < 0.0):
+        raise ValueError("dwell time is negative.")
+    active = times[times > 0.0]
+    t_l2 = dwell_position_l2(active)
+    p_l2 = w_l2 * t_l2
+
+    dose_gy = np.asarray(dose_gy, dtype=np.float64)
+    j_dose, dose_breakdown = cost_function(
+        dose_gy, masks, ctv_names, oar_names, rx_params
+    )
+    total = float(j_dose) + float(p_l2)
+    breakdown = {
+        "L": total,
+        "J_dose": float(j_dose),
+        "P_l2": float(p_l2),
+        "dwell_position_l2": t_l2,
+        "w_l2": w_l2,
+        "n_active": int(active.size),
+        "total_time_s": float(active.sum()) if active.size else 0.0,
+        "dose": dose_breakdown,
+    }
+    return total, breakdown
+
+
 def simultaneous_loss(
     needle_meshes,
     dwell_arc_mm,
@@ -300,14 +344,7 @@ def simultaneous_loss(
     dose_gy : ndarray
         Dose grid in Gy used for ``J_dose``.
     """
-    params = _resolve_loss_params(loss_params)
-    w_l2 = float(params["w_l2"])
-    if w_l2 < 0.0:
-        raise ValueError("w_l2 must be >= 0.")
-
     dwells = assemble_active_dwells(needle_meshes, dwell_arc_mm, dwell_times)
-    t_l2 = dwell_position_l2(dwells["times"])
-    p_l2 = w_l2 * t_l2
 
     if dose_gy is None:
         if len(dwells["times"]) == 0:
@@ -334,26 +371,17 @@ def simultaneous_loss(
                 f"dose_gy shape {dose_gy.shape} does not match volume shape {volume.shape}."
             )
 
-    j_dose, dose_breakdown = cost_function(
-        dose_gy, masks, ctv_names, oar_names, rx_params
+    total, breakdown = evaluate_simultaneous_loss(
+        dose_gy, dwells["times"], masks, ctv_names, oar_names,
+        rx_params=rx_params, loss_params=loss_params,
     )
-    total = float(j_dose) + float(p_l2)
-
-    breakdown = {
-        "L": total,
-        "J_dose": float(j_dose),
-        "P_l2": float(p_l2),
-        "dwell_position_l2": t_l2,
-        "w_l2": w_l2,
-        "n_active": int(len(dwells["times"])),
-        "total_time_s": float(dwells["times"].sum()) if len(dwells["times"]) else 0.0,
-        "dose": dose_breakdown,
+    breakdown.update({
         "positions": dwells["positions"],
         "directions": dwells["directions"],
         "times": dwells["times"],
         "channel_ids": dwells["channel_ids"],
         "arc_mm": dwells["arc_mm"],
-    }
+    })
     return total, breakdown, dose_gy
 
 

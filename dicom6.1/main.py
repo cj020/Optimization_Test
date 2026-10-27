@@ -7,10 +7,10 @@ from dicom_loader import (
     build_structure_masks,
     resample_volume_to_spacing,
 )
-from needle_mesh import mesh_needle_in_ptv
+from needle_mesh import mesh_needle_in_ptv, assemble_mesh_dwells
 from dose_contribution import dose_contribution
-from cost_function import cost_function, print_cost_report
 from plan_evaluation import evaluate_plan, print_evaluation_report
+from simultaneous_loss import evaluate_simultaneous_loss, print_simultaneous_loss
 from ipsa import run_ipsa
 from ui import start_ui
 
@@ -194,27 +194,44 @@ def main():
 
     print(f"\n  Total mesh points across all needles: {total_mesh_points}")
 
+    mesh_dwells = assemble_mesh_dwells(needle_meshes)
+    mesh_positions = mesh_dwells["positions"]
+    mesh_directions = mesh_dwells["directions"]
+    mesh_channels = mesh_dwells["channel_ids"]
+    n_mesh = len(mesh_positions)
+
+    if n_mesh == 0:
+        print("  ERROR: No mesh points to use as candidate dwells.")
+        return
+
     # ------------------------------------------------------------------
-    # 5. TG-43 dose calculation (uniform initial dwell times, on image grid)
+    # 5. TG-43 dose calculation (uniform time on every mesh vertex)
     # ------------------------------------------------------------------
     
     print(f"\n{'='*70}")
-    print(f"TG-43 DOSE CALCULATION (uniform initial dwell times, on {modality} grid)")
+    print(f"TG-43 DOSE CALCULATION (uniform time on all mesh vertices, on {modality} grid)")
     print(f"{'='*70}")
 
-    active_mask = dwell_times > 0
-    n_active = int(active_mask.sum())
-    uniform_time = float(np.mean(dwell_times[active_mask]))
-    initial_dwell_times = np.where(active_mask, uniform_time, 0.0) # assign uniform_time to active dwell positions and 0.0 everywhere else
+    orig_active = dwell_times[dwell_times > 0]
+    orig_total = float(orig_active.sum()) if len(orig_active) else 0.0
+    orig_mean = float(orig_active.mean()) if len(orig_active) else 1.0
+    orig_max = float(orig_active.max()) if len(orig_active) else 1.0
+    # Same total irradiation time as the original plan, spread evenly over
+    # every mesh vertex. IPSA then turns unused vertices off (time -> 0)
+    # and slides remaining activity along each catheter.
+    uniform_time = orig_total / n_mesh if n_mesh else 0.0
+    initial_dwell_times = np.full(n_mesh, uniform_time, dtype=np.float64)
 
-    print(f"\n  Active dwell positions     : {n_active}")
-    print(f"  Uniform dwell time         : {uniform_time:.4f} s")
+    print(f"\n  Candidate mesh vertices    : {n_mesh}")
+    print(f"  Original active dwells     : {len(orig_active)}")
+    print(f"  Original mean dwell time   : {orig_mean:.4f} s")
+    print(f"  Uniform mesh dwell time    : {uniform_time:.4f} s")
     print(f"  Total irradiation time     : {initial_dwell_times.sum():.2f} s "
-          f"(original: {dwell_times.sum():.2f} s)")
+          f"(original: {orig_total:.2f} s)")
 
     total_dose_cgy = dose_contribution(
-        dwell_pos=dwell_positions,
-        norm_dwell_dir=dwell_directions,
+        dwell_pos=mesh_positions,
+        norm_dwell_dir=mesh_directions,
         dwell_times=initial_dwell_times,
         volume=volume,
         spacing=tuple(vol_spacing),
@@ -255,37 +272,46 @@ def main():
     # ------------------------------------------------------------------
 
     rx_params = start_ui(
-        volume, tuple(vol_spacing), tuple(vol_origin), dwell_positions,
+        volume, tuple(vol_spacing), tuple(vol_origin), mesh_positions,
         dose_gy=dose_gy, masks=masks, ctv_names=ctv_names, oar_names=oar_names,
     )
 
-    J, breakdown = cost_function(dose_gy, masks, ctv_names, oar_names, rx_params)
-    print_cost_report(J, breakdown, rx_params)
+    L, breakdown = evaluate_simultaneous_loss(
+        dose_gy, initial_dwell_times, masks, ctv_names, oar_names, rx_params,
+    )
+    print_simultaneous_loss(L, breakdown, rx_params)
 
     # ------------------------------------------------------------------
-    # 7. IPSA dose optimisation (500 iterations)
+    # 7. IPSA: dwell time + mesh-position optimisation
     # ------------------------------------------------------------------
 
     optimized_dwell_times, ipsa_history = run_ipsa(
-        dwell_positions, dwell_directions, initial_dwell_times,
+        mesh_positions, mesh_directions, initial_dwell_times,
         initial_dose_gy=dose_gy,
         masks=masks, ctv_names=ctv_names, oar_names=oar_names,
         volume=volume, spacing=tuple(vol_spacing), origin=tuple(vol_origin),
         L=Length_source, S_k=S_k, Lambda=Lambda,
         rx_params=rx_params,
+                channel_ids=mesh_channels,
+        ipsa_params={
+            # Bounds / step size from the original plan, not the small
+            # per-vertex uniform start, so activity can concentrate.
+            "t_max": 3.0 * orig_max,
+            "perturbation_std": 0.3 * orig_mean,
+        },
     )
 
     # ------------------------------------------------------------------
-    # 8. Recompute dose with optimised dwell times
+    # 8. Recompute dose with optimised mesh dwells
     # ------------------------------------------------------------------
 
     print(f"\n{'='*70}")
-    print(f"TG-43 DOSE CALCULATION (optimised dwell times, on {modality} grid)")
+    print(f"TG-43 DOSE CALCULATION (optimised mesh dwells, on {modality} grid)")
     print(f"{'='*70}")
 
     opt_dose_cgy = dose_contribution(
-        dwell_pos=dwell_positions,
-        norm_dwell_dir=dwell_directions,
+        dwell_pos=mesh_positions,
+        norm_dwell_dir=mesh_directions,
         dwell_times=optimized_dwell_times,
         volume=volume,
         spacing=tuple(vol_spacing),
@@ -321,13 +347,14 @@ def main():
               f"{d.min():>10.4f} {d.mean():>11.4f} {d.max():>10.4f} {d95:>10.4f}")
 
     # ------------------------------------------------------------------
-    # 9. Cost function evaluation (optimised plan)
+    # 9. Simultaneous-loss evaluation (optimised plan)
     # ------------------------------------------------------------------
 
-    J_opt, breakdown_opt = cost_function(
-        opt_dose_gy, masks, ctv_names, oar_names, rx_params,
+    L_opt, breakdown_opt = evaluate_simultaneous_loss(
+        opt_dose_gy, optimized_dwell_times, masks, ctv_names, oar_names,
+        rx_params,
     )
-    print_cost_report(J_opt, breakdown_opt, rx_params)
+    print_simultaneous_loss(L_opt, breakdown_opt, rx_params)
 
     # ------------------------------------------------------------------
     # 10. Clinical plan evaluation (DVH criteria vs prescription)
@@ -363,11 +390,14 @@ def main():
     print(f"  CTV mask(s)      : {ctv_names}")
     print(f"  PTV mask(s)      : {ptv_names}")
     print(f"  OAR mask(s)      : {oar_names}")
-    print(f"  Dwell positions  : {dwell_positions.shape[0]}")
-    print(f"  Source strength   : {S_k:.4f} U")
-    print(f"\n  Initial (uniform) dose : max {dose_gy.max():.4f} Gy   cost J = {J:.2f}")
-    print(f"  Optimised dose         : max {opt_dose_gy.max():.4f} Gy   cost J = {J_opt:.2f}")
-    print(f"  Cost reduction         : {(1 - J_opt / J) * 100:.1f}%")
+    print(f"  Mesh candidates  : {n_mesh}")
+    print(f"  Active after IPSA: {int(np.sum(optimized_dwell_times > 0))}")
+    print(f"  Source strength  : {S_k:.4f} U")
+    print(f"\n  Initial (uniform mesh) : max {dose_gy.max():.4f} Gy   L = {L:.2f}  "
+          f"(J_dose {breakdown['J_dose']:.2f}, P_l2 {breakdown['P_l2']:.2f})")
+    print(f"  Optimised             : max {opt_dose_gy.max():.4f} Gy   L = {L_opt:.2f}  "
+          f"(J_dose {breakdown_opt['J_dose']:.2f}, P_l2 {breakdown_opt['P_l2']:.2f})")
+    print(f"  Loss reduction        : {(1 - L_opt / L) * 100:.1f}%")
     n_fail = sum(
         1 for role in eval_report.values()
         for c in role.get("checks", [])

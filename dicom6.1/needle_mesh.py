@@ -87,3 +87,86 @@ def mesh_needle_in_ptv(channel_dwells, ptv_mask, origin, spacing,
     mesh_points = p0[np.newaxis, :] + t_mesh[:, np.newaxis] * direction[np.newaxis, :]
 
     return mesh_points, t_entry, t_exit
+
+
+_LENGTH_EPS_MM = 1e-12
+
+
+def _channel_sort_key(channel_id):
+    try:
+        return (0, int(channel_id))
+    except (TypeError, ValueError):
+        return (1, str(channel_id))
+
+
+def mesh_point_directions(mesh_points):
+    """Unit tangent at each vertex of an ordered catheter mesh."""
+    pts = np.asarray(mesh_points, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[1] != 3:
+        raise ValueError("mesh_points must have shape (K, 3).")
+    n = len(pts)
+    dirs = np.zeros((n, 3), dtype=np.float64)
+    if n == 0:
+        return dirs
+    if n == 1:
+        dirs[0] = np.array([0.0, 0.0, 1.0])
+        return dirs
+
+    segs = np.diff(pts, axis=0)
+    lengths = np.linalg.norm(segs, axis=1)
+    fallback = np.array([0.0, 0.0, 1.0])
+    last = fallback
+    for k in range(n - 1):
+        if lengths[k] > _LENGTH_EPS_MM:
+            last = segs[k] / lengths[k]
+        dirs[k] = last
+    dirs[-1] = last
+    return dirs
+
+
+def assemble_mesh_dwells(needle_meshes):
+    """Flatten every needle mesh into candidate dwell positions.
+
+    Each mesh vertex is one candidate. Catheter direction at a vertex is the
+    unit tangent of the segment that starts there (the last vertex reuses the
+    previous segment). Empty meshes are omitted.
+
+    Returns
+    -------
+    dwells : dict
+        ``positions`` (N, 3), ``directions`` (N, 3), ``channel_ids`` (N,),
+        ``local_index`` (N,) — vertex index within that channel's mesh.
+    """
+    positions = []
+    directions = []
+    channel_ids = []
+    local_index = []
+
+    for channel_id in sorted(needle_meshes.keys(), key=_channel_sort_key):
+        pts = np.asarray(needle_meshes[channel_id], dtype=np.float64)
+        if pts.size == 0:
+            continue
+        if pts.ndim != 2 or pts.shape[1] != 3:
+            raise ValueError(
+                f"Channel {channel_id}: mesh_points must have shape (K, 3)."
+            )
+        n = len(pts)
+        positions.append(pts)
+        directions.append(mesh_point_directions(pts))
+        channel_ids.append(np.full(n, channel_id))
+        local_index.append(np.arange(n, dtype=int))
+
+    if not positions:
+        return {
+            "positions": np.zeros((0, 3), dtype=np.float64),
+            "directions": np.zeros((0, 3), dtype=np.float64),
+            "channel_ids": np.zeros(0, dtype=int),
+            "local_index": np.zeros(0, dtype=int),
+        }
+
+    return {
+        "positions": np.vstack(positions),
+        "directions": np.vstack(directions),
+        "channel_ids": np.concatenate(channel_ids),
+        "local_index": np.concatenate(local_index),
+    }
