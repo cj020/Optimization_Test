@@ -55,7 +55,7 @@ def mesh_needle_in_ptv(channel_dwells, ptv_mask, origin, spacing,
     t_lo = t_min_dwell - search_pad
     t_hi = t_max_dwell + search_pad
 
-    # Dense probe along the line (0.25 mm resolution)
+    # Dense probe along the line (0.25 mm resolution). (The length of the segment is based on the line, then it may not be the real distance.)
     probe_step = 0.25
     t_probe = np.arange(t_lo, t_hi + probe_step, probe_step)
     probe_pts = p0[np.newaxis, :] + t_probe[:, np.newaxis] * direction[np.newaxis, :]
@@ -68,7 +68,7 @@ def mesh_needle_in_ptv(channel_dwells, ptv_mask, origin, spacing,
     in_bounds = (iz >= 0) & (iz < nz) & (iy >= 0) & (iy < ny) & (ix >= 0) & (ix < nx)
     inside = np.zeros(len(t_probe), dtype=bool)
     valid = np.where(in_bounds)[0]
-    inside[valid] = ptv_mask[iz[valid], iy[valid], ix[valid]]
+    inside[valid] = ptv_mask[iz[valid], iy[valid], ix[valid]] # select the voxel indices for valid probe points, then retrieves the Boolean mask values at those voxels.
 
     if not np.any(inside):
         return np.empty((0, 3)), None, None
