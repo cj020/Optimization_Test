@@ -46,7 +46,7 @@ def mesh_needle_in_ptv(channel_dwells, ptv_mask, origin, spacing,
     direction = vec / length
 
     # Project all dwells onto the line: point = p0 + t * direction
-    t_dwells = np.dot(channel_dwells - p0, direction)
+    t_dwells = np.dot(channel_dwells - p0, direction) # dot product of two vectors
     t_min_dwell = t_dwells.min()
     t_max_dwell = t_dwells.max()
 
