@@ -14,6 +14,9 @@ def _channel_sort_key(channel_id):
 
 
 def _as_xyz(values):
+    """
+    This function converts an input into a NumPy array with exactly three elements.
+    """
     arr = np.asarray(values, dtype=np.float64).reshape(3)
     return arr
 
@@ -46,7 +49,7 @@ def structure_search_bounds(masks, origin, spacing, names=None):
     keys = list(masks.keys()) if names is None else list(names)
     combined = None
     for name in keys:
-        mask = masks.get(name)
+        mask = masks.get(name) # This retrieves the mask corresponding to the structure name "name" from the dictionary masks.
         if mask is None:
             continue
         combined = mask if combined is None else (combined | mask)
@@ -54,7 +57,7 @@ def structure_search_bounds(masks, origin, spacing, names=None):
     if combined is None or not np.any(combined):
         return None, None
 
-    iz, iy, ix = np.where(combined)
+    iz, iy, ix = np.where(combined) # np.where(combined) returns the indices of all voxels where combined is True.
     xs = origin[0] + ix.astype(np.float64) * spacing[0]
     ys = origin[1] + iy.astype(np.float64) * spacing[1]
     zs = origin[2] + iz.astype(np.float64) * spacing[2]

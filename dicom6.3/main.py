@@ -92,6 +92,8 @@ def main():
 
     # Rasterize CTV, PTV, and OAR masks on the image grid
     print(f"\n  Rasterizing structure masks on {modality} grid {vol_shape} ...")
+
+    # masks function returns a 3D Boolean NumPy array that indicates whether each voxel belongs to a particular anatomical structure.
     masks = build_structure_masks(
         structures,
         grid_origin=vol_origin,
