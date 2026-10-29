@@ -1,6 +1,7 @@
 """Simultaneous dwell-location loss on fixed catheters.
 
-Each catheter is the ordered needle mesh from ``needle_mesh.mesh_needle_in_ptv``.
+Each catheter is the ordered needle mesh from
+``needle_mesh.mesh_channel_in_search_space``.
 A candidate chooses an arc length along that mesh and a dwell time for every
 dwell. Catheter trajectories are fixed. This module evaluates the objective
 only.

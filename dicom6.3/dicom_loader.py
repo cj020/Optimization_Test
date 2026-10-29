@@ -729,6 +729,46 @@ def get_rtdose_grid_info(folder, skip_keywords=None):
         return pydicom.dcmread(rtdose_path)
     return None
 
+def extract_channel_geometry(rtplan):
+    """Needle start/end per channel from RTPLAN, ignoring dwell times.
+
+    Each channel is a straight needle from the first to the last
+    ``ControlPoint3DPosition``. Intermediate dwell positions and
+    irradiation times are not used for meshing.
+
+    Returns
+    -------
+    channels : list[dict]
+        ``channel_id``, ``start`` (3,), ``end`` (3,), ``n_control_points``.
+    """
+    channels = []
+    if rtplan is None:
+        return channels
+
+    try:
+        for app in rtplan.ApplicationSetupSequence:
+            for channel in app.ChannelSequence:
+                cps = getattr(channel, "BrachyControlPointSequence", None)
+                if not cps:
+                    continue
+                pts = []
+                for cp in cps:
+                    if hasattr(cp, "ControlPoint3DPosition"):
+                        pts.append(np.array(cp.ControlPoint3DPosition, dtype=float))
+                if len(pts) < 2:
+                    continue
+                channels.append({
+                    "channel_id": int(channel.ChannelNumber),
+                    "start": pts[0],
+                    "end": pts[-1],
+                    "n_control_points": len(pts),
+                })
+    except Exception as e:
+        print("Error reading channel geometry from RTPLAN:", e)
+
+    return channels
+
+
 def get_source_strength(rtplan):
     """Extract ReferenceAirKermaRate from RTPLAN (in µGy·m²/h = cGy·cm²/h = U)."""
     if rtplan is None:

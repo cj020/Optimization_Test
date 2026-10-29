@@ -40,9 +40,28 @@ def _format_value(value):
     return f"{float(value):.2f}"
 
 
+_MESH_REGION_COLORS = {
+    "CTV": "r",
+    "PTV": "tab:orange",
+    "OAR": "c",
+    "CTV+OAR": "m",
+    "PTV+OAR": "m",
+    "TARGET+OAR": "m",
+    "OUTSIDE": "y",
+}
+
+
+def _mesh_marker_color(label):
+    if isinstance(label, dict):
+        region = label.get("region", "OUTSIDE")
+    else:
+        region = label or "OUTSIDE"
+    return _MESH_REGION_COLORS.get(region, "y")
+
+
 def start_ui(volume, spacing, origin, dwell_positions, show=None,
              dose_gy=None, masks=None, ctv_names=None, oar_names=None,
-             initial_params=None):
+             initial_params=None, mesh_labels=None):
     """
     Image slice viewer with cost-function parameters shown and editable.
 
@@ -55,6 +74,9 @@ def start_ui(volume, spacing, origin, dwell_positions, show=None,
         Optional; if provided, the cost J is recomputed when a value is applied.
     initial_params : dict or None
         Starting cost-function values (defaults to PRESCRIPTION_PARAMS).
+    mesh_labels : list[dict] or None
+        Per-vertex organ labels from needle meshing. Markers are coloured
+        by region (CTV/PTV red/orange, OAR cyan, overlap magenta, outside yellow).
 
     Returns
     -------
@@ -98,16 +120,27 @@ def start_ui(volume, spacing, origin, dwell_positions, show=None,
         world_to_voxel(p, origin, spacing)
         for p in dwell_positions
     ] # the dwell positions converted to voxel coordinates (z, y, x)
+    label_list = list(mesh_labels) if mesh_labels is not None else None
 
 
     def draw_slice(z):
         ax.clear()
         ax.imshow(volume[z], cmap="gray", vmin=vmin, vmax=vmax)
 
-        # plot dwell points in this slice
-        for (zz, yy, xx) in voxel_points:
-            if zz == z:
-                ax.plot(xx, yy, "ro", markersize=4)
+        # plot mesh points in this slice, coloured by organ label
+        seen = set()
+        for i, (zz, yy, xx) in enumerate(voxel_points):
+            if zz != z:
+                continue
+            lab = label_list[i] if label_list is not None and i < len(label_list) else None
+            color = _mesh_marker_color(lab)
+            ax.plot(xx, yy, "o", color=color, markersize=4)
+            region = lab.get("region") if isinstance(lab, dict) else None
+            if region and region not in seen:
+                seen.add(region)
+                ax.plot([], [], "o", color=color, markersize=4, label=region)
+        if seen:
+            ax.legend(loc="upper right", fontsize=7, title="Mesh")
         z_mm = origin[2] + z * spacing[2]
         ax.set_title(f"Slice {z}  |  z = {z_mm:.2f} mm")
 

@@ -2,12 +2,19 @@ import numpy as np
 from dicom_loader import (
     load_dicom,
     extract_dwell_points_with_dwell_time_and_direction,
+    extract_channel_geometry,
     get_source_strength,
     identify_structures,
     build_structure_masks,
     resample_volume_to_spacing,
 )
-from needle_mesh import mesh_needle_in_ptv, assemble_mesh_dwells
+from needle_mesh import (
+    assemble_mesh_dwells,
+    count_mesh_labels,
+    label_mesh_points,
+    mesh_channel_in_search_space,
+    structure_search_bounds,
+)
 from dose_contribution import dose_contribution
 from plan_evaluation import evaluate_plan, print_evaluation_report
 from simultaneous_loss import evaluate_simultaneous_loss, print_simultaneous_loss
@@ -105,14 +112,11 @@ def main():
         vol_cc = n_vox * voxel_vol_mm3 / 1000.0
         print(f"  {s['name']:<30} {s['classification']:<6} {n_vox:>10} {vol_cc:>14.2f}")
 
-    # Needle meshing uses CTV (fall back to PTV if no CTV is present)
-    mesh_target_names = ctv_names if ctv_names else ptv_names
-    ptv_mask = np.zeros(vol_shape, dtype=bool)
-    for name in mesh_target_names:
-        if name in masks:
-            ptv_mask |= masks[name]
-    print(f"\n  Combined needle-mesh target mask "
-          f"({'CTV' if ctv_names else 'PTV'}): {int(ptv_mask.sum())} voxels")
+    # Search space for meshing: bounding box of all CTV, PTV, and OAR
+    search_names = [
+        name for name in (ctv_names + ptv_names + oar_names) if name in masks
+    ]
+    structure_classes = {s["name"]: s["classification"] for s in structures}
 
 
     # ------------------------------------------------------------------
@@ -152,53 +156,87 @@ def main():
     print(f"  Dwell Z range: [{dwell_positions[:,2].min():.2f}, {dwell_positions[:,2].max():.2f}] mm")
     
     # ------------------------------------------------------------------
-    # 4. Mesh each needle within PTV (+5 mm margin) at 1 mm spacing
+    # 4. Mesh each channel along the needle line inside the PTV+OAR box
     # ------------------------------------------------------------------
     
     print(f"\n{'='*70}")
-    print("NEEDLE MESHING (PTV + 5 mm margin, 1 mm spacing)")
+    print("NEEDLE MESHING (channel line ∩ CTV/PTV/OAR bounding box, 1 mm)")
     print(f"{'='*70}")
 
-    unique_channels = np.unique(channels)
-    needle_meshes = {}   # channel_id -> mesh_points (K, 3)
+    plan_channels = extract_channel_geometry(rtplan)
+    if not plan_channels:
+        print("  ERROR: No channel start/end points found in RTPLAN.")
+        return
 
-    print(f"\n  {'Channel':<10} {'Dwells':>7} {'PTV entry (mm)':>15} "
-          f"{'PTV exit (mm)':>14} {'PTV length':>11} {'Mesh pts':>9} "
-          f"{'Mesh length':>12}")
-    print(f"  {'-'*10} {'-'*7} {'-'*15} {'-'*14} {'-'*11} {'-'*9} {'-'*12}")
+    box_min, box_max = structure_search_bounds(
+        masks, vol_origin, vol_spacing, names=search_names,
+    )
+    if box_min is None:
+        print("  ERROR: Search space is empty (no CTV/PTV/OAR voxels).")
+        return
+
+    print(f"\n  Search space (AABB of CTV + PTV + OAR):")
+    print(f"    X : [{box_min[0]:.2f}, {box_max[0]:.2f}] mm")
+    print(f"    Y : [{box_min[1]:.2f}, {box_max[1]:.2f}] mm")
+    print(f"    Z : [{box_min[2]:.2f}, {box_max[2]:.2f}] mm")
+    print(f"    Size: {box_max[0] - box_min[0]:.2f} × "
+          f"{box_max[1] - box_min[1]:.2f} × "
+          f"{box_max[2] - box_min[2]:.2f} mm")
+    print(f"  Channels from RTPLAN (dwell positions ignored): {len(plan_channels)}")
+
+    needle_meshes = {}   # channel_id -> mesh_points (K, 3)
+    needle_labels = {}   # channel_id -> list of label dicts
+
+    print(f"\n  {'Channel':<10} {'CPs':>5} {'Needle (mm)':>12} "
+          f"{'t_enter':>10} {'t_exit':>10} {'Mesh pts':>9} "
+          f"{'CTV/PTV':>8} {'OAR':>6} {'Out':>6}")
+    print(f"  {'-'*10} {'-'*5} {'-'*12} {'-'*10} {'-'*10} {'-'*9} "
+          f"{'-'*8} {'-'*6} {'-'*6}")
 
     total_mesh_points = 0
 
-    for ch_id in unique_channels:
-        ch_mask = channels == ch_id
-        ch_dwells = dwell_positions[ch_mask]
-
-        mesh_pts, t_entry, t_exit = mesh_needle_in_ptv(
-            ch_dwells, ptv_mask, vol_origin, vol_spacing,
-            margin=5.0, mesh_step=1.0,
+    for ch in plan_channels:
+        ch_id = int(ch["channel_id"])
+        needle_len = float(np.linalg.norm(ch["end"] - ch["start"]))
+        mesh_pts, t_entry, t_exit = mesh_channel_in_search_space(
+            ch["start"], ch["end"], box_min, box_max, mesh_step=1.0,
         )
-
-        needle_meshes[int(ch_id)] = mesh_pts
+        labels = label_mesh_points(
+            mesh_pts, masks, vol_origin, vol_spacing, structure_classes,
+        )
+        needle_meshes[ch_id] = mesh_pts
+        needle_labels[ch_id] = labels
 
         if len(mesh_pts) == 0:
-            print(f"  {int(ch_id):<10} {len(ch_dwells):>7}   (no PTV intersection)")
+            print(f"  {ch_id:<10} {ch['n_control_points']:>5} {needle_len:>12.2f} "
+                  f"  (no search-space intersection)")
             continue
 
-        ptv_len = t_exit - t_entry
-        mesh_len = np.linalg.norm(mesh_pts[-1] - mesh_pts[0])
+        n_target = sum(1 for lab in labels if lab["in_ctv"] or lab["in_ptv"])
+        n_oar = sum(1 for lab in labels if lab["in_oar"])
+        n_out = sum(1 for lab in labels if lab["region"] == "OUTSIDE")
         total_mesh_points += len(mesh_pts)
 
-        print(f"  {int(ch_id):<10} {len(ch_dwells):>7} {t_entry:>15.2f} "
-              f"{t_exit:>14.2f} {ptv_len:>11.2f} {len(mesh_pts):>9} "
-              f"{mesh_len:>12.2f}")
+        print(f"  {ch_id:<10} {ch['n_control_points']:>5} {needle_len:>12.2f} "
+              f"{t_entry:>10.2f} {t_exit:>10.2f} {len(mesh_pts):>9} "
+              f"{n_target:>8} {n_oar:>6} {n_out:>6}")
 
     print(f"\n  Total mesh points across all needles: {total_mesh_points}")
 
-    mesh_dwells = assemble_mesh_dwells(needle_meshes)
+    mesh_dwells = assemble_mesh_dwells(needle_meshes, needle_labels)
     mesh_positions = mesh_dwells["positions"]
     mesh_directions = mesh_dwells["directions"]
     mesh_channels = mesh_dwells["channel_ids"]
+    mesh_labels = mesh_dwells["labels"]
     n_mesh = len(mesh_positions)
+
+    region_counts, organ_counts = count_mesh_labels(mesh_labels)
+    print(f"\n  Mesh labels by region (OAR vertices are kept for optimisation):")
+    for region in sorted(region_counts):
+        print(f"    {region:<12}: {region_counts[region]}")
+    print(f"  Mesh labels by organ (a vertex may count in more than one):")
+    for organ in sorted(organ_counts):
+        print(f"    {organ:<30}: {organ_counts[organ]}")
 
     if n_mesh == 0:
         print("  ERROR: No mesh points to use as candidate dwells.")
@@ -274,6 +312,7 @@ def main():
     rx_params = start_ui(
         volume, tuple(vol_spacing), tuple(vol_origin), mesh_positions,
         dose_gy=dose_gy, masks=masks, ctv_names=ctv_names, oar_names=oar_names,
+        mesh_labels=mesh_labels,
     )
 
     L, breakdown = evaluate_simultaneous_loss(
@@ -292,7 +331,7 @@ def main():
         volume=volume, spacing=tuple(vol_spacing), origin=tuple(vol_origin),
         L=Length_source, S_k=S_k, Lambda=Lambda,
         rx_params=rx_params,
-                channel_ids=mesh_channels,
+        channel_ids=mesh_channels,
         ipsa_params={
             # Bounds / step size from the original plan, not the small
             # per-vertex uniform start, so activity can concentrate.
@@ -300,6 +339,16 @@ def main():
             "perturbation_std": 0.3 * orig_mean,
         },
     )
+
+    active_mask = optimized_dwell_times > 0
+    active_labels = [lab for lab, on in zip(mesh_labels, active_mask) if on]
+    active_region, active_organ = count_mesh_labels(active_labels)
+    print(f"\n  Active mesh vertices by region (OAR not excluded):")
+    for region in sorted(active_region):
+        print(f"    {region:<12}: {active_region[region]}")
+    print(f"  Active mesh vertices by organ:")
+    for organ in sorted(active_organ):
+        print(f"    {organ:<30}: {active_organ[organ]}")
 
     # ------------------------------------------------------------------
     # 8. Recompute dose with optimised mesh dwells
@@ -390,7 +439,10 @@ def main():
     print(f"  CTV mask(s)      : {ctv_names}")
     print(f"  PTV mask(s)      : {ptv_names}")
     print(f"  OAR mask(s)      : {oar_names}")
-    print(f"  Mesh candidates  : {n_mesh}")
+    print(f"  Mesh candidates  : {n_mesh}  "
+          f"(CTV/PTV {sum(1 for lab in mesh_labels if lab['in_ctv'] or lab['in_ptv'])}, "
+          f"OAR {sum(1 for lab in mesh_labels if lab['in_oar'])}, "
+          f"outside {sum(1 for lab in mesh_labels if lab['region'] == 'OUTSIDE')})")
     print(f"  Active after IPSA: {int(np.sum(optimized_dwell_times > 0))}")
     print(f"  Source strength  : {S_k:.4f} U")
     print(f"\n  Initial (uniform mesh) : max {dose_gy.max():.4f} Gy   L = {L:.2f}  "
