@@ -215,7 +215,7 @@ def label_mesh_points(mesh_points, masks, origin, spacing, structure_classes):
         hit = np.zeros(n, dtype=bool)
         valid = np.where(in_bounds)[0]
         if len(valid):
-            hit[valid] = mask[iz[valid], iy[valid], ix[valid]]
+            hit[valid] = mask[iz[valid], iy[valid], ix[valid]]   # check whether the point is inside the structure
         hits[name] = (hit, cls)
 
     labels = []
