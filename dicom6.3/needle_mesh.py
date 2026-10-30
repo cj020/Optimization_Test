@@ -78,8 +78,8 @@ def line_aabb_intersection(point, direction, box_min, box_max):
     bmin = _as_xyz(box_min)
     bmax = _as_xyz(box_max)
 
-    t_enter = -np.inf
-    t_exit = np.inf
+    t_enter = -np.inf                              # negative infinity
+    t_exit = np.inf                                # positive infinity
     for i in range(3):
         if abs(d[i]) < _DIR_EPS:
             if p0[i] < bmin[i] or p0[i] > bmax[i]:
@@ -201,7 +201,7 @@ def label_mesh_points(mesh_points, masks, origin, spacing, structure_classes):
             for _ in range(n)
         ]
 
-    nz, ny, nx = sample.shape
+    nz, ny, nx = sample.shape          # This gives the dimensions of the image volume, not the dimensions of a specific structure.
     ix, iy, iz = vox[:, 0], vox[:, 1], vox[:, 2]
     in_bounds = (
         (iz >= 0) & (iz < nz) & (iy >= 0) & (iy < ny) & (ix >= 0) & (ix < nx)
