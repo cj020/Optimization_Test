@@ -9,10 +9,14 @@ from dicom_loader import (
     resample_volume_to_spacing,
 )
 from needle_mesh import (
+    EXTENDED_PTV_NAME,
     assemble_mesh_dwells,
     count_mesh_labels,
+    extended_structure_mask,
+    filter_mesh_dwells,
     label_mesh_points,
     mesh_channel_in_search_space,
+    points_in_mask,
     structure_search_bounds,
 )
 from dose_contribution import dose_contribution
@@ -23,6 +27,11 @@ from cost_function import copy_prescription_params
 
 Length_source = 3.5  # active length of the source in mm
 Lambda = 1.113       # Dose-rate constant in cGy/(h·U), where U = µGy·m²/h = cGy·cm²/h
+
+# Candidate dwell options for optimisation
+CANDIDATES_ALL = "all"                    # every mesh vertex in the search area
+CANDIDATES_EXTENDED_PTV = "extended_ptv"  # only vertices inside the Extended PTV
+EXTENDED_PTV_MARGIN_MM = 5.0              # Extended PTV = PTV + this margin beyond its boundary
 
 
 class PipelineError(RuntimeError):
@@ -157,6 +166,17 @@ def load_case(folder):
     ]
     structure_classes = {s["name"]: s["classification"] for s in structures}
 
+    # Extended PTV (PTV + margin), used to restrict candidate dwells
+    ext_ptv_mask = extended_structure_mask(
+        masks, ptv_names, vol_spacing, margin_mm=EXTENDED_PTV_MARGIN_MM,
+    )
+    if ext_ptv_mask is None:
+        print(f"\n  {EXTENDED_PTV_NAME}: no PTV voxels — not available.")
+    else:
+        print(f"\n  {EXTENDED_PTV_NAME} (PTV + {EXTENDED_PTV_MARGIN_MM:g} mm): "
+              f"{int(ext_ptv_mask.sum())} voxels, "
+              f"{ext_ptv_mask.sum() * voxel_vol_mm3 / 1000.0:.2f} cm3")
+
     # ------------------------------------------------------------------
     # 3. Extract dwell information from RTPLAN
     # ------------------------------------------------------------------
@@ -204,6 +224,8 @@ def load_case(folder):
         "ptv_names": ptv_names,
         "oar_names": oar_names,
         "masks": masks,
+        "extended_ptv_mask": ext_ptv_mask,
+        "extended_ptv_margin_mm": EXTENDED_PTV_MARGIN_MM,
         "rtdose": rtdose,
         "rtplan": rtplan,
         "S_k": S_k,
@@ -213,8 +235,16 @@ def load_case(folder):
     }
 
 
-def build_mesh(case):
+def build_mesh(case, candidate_region=CANDIDATES_ALL,
+               ptv_margin_mm=EXTENDED_PTV_MARGIN_MM):
     """Steps 4-5: mesh the RTPLAN channels and compute the uniform-time TG-43 dose.
+
+    Parameters
+    ----------
+    candidate_region : str
+        ``CANDIDATES_ALL`` keeps every mesh vertex in the search area;
+        ``CANDIDATES_EXTENDED_PTV`` keeps only vertices inside the
+        Extended PTV (PTV plus ``ptv_margin_mm`` beyond its boundary).
 
     Returns
     -------
@@ -301,6 +331,33 @@ def build_mesh(case):
     print(f"\n  Total mesh points across all needles: {total_mesh_points}")
 
     mesh_dwells = assemble_mesh_dwells(needle_meshes, needle_labels)
+
+    # Extended PTV label on every vertex, then optionally restrict to it.
+    if candidate_region not in (CANDIDATES_ALL, CANDIDATES_EXTENDED_PTV):
+        raise PipelineError(f"Unknown candidate region: {candidate_region!r}")
+    if ptv_margin_mm == case.get("extended_ptv_margin_mm"):
+        ext_ptv_mask = case.get("extended_ptv_mask")
+    else:
+        ext_ptv_mask = extended_structure_mask(
+            masks, case["ptv_names"], vol_spacing, margin_mm=ptv_margin_mm,
+        )
+    in_ext = points_in_mask(mesh_dwells["positions"], ext_ptv_mask, vol_origin, vol_spacing)
+    for lab, flag in zip(mesh_dwells["labels"], in_ext):
+        lab["in_extended_ptv"] = bool(flag)
+    print(f"\n  Vertices inside {EXTENDED_PTV_NAME} (PTV + {ptv_margin_mm:g} mm): "
+          f"{int(in_ext.sum())} / {len(in_ext)}")
+
+    if candidate_region == CANDIDATES_EXTENDED_PTV:
+        if ext_ptv_mask is None:
+            raise PipelineError(
+                f"No PTV structure found; cannot restrict dwells to the {EXTENDED_PTV_NAME}."
+            )
+        mesh_dwells = filter_mesh_dwells(mesh_dwells, in_ext)
+        print(f"  Candidate dwells restricted to the {EXTENDED_PTV_NAME}: "
+              f"{len(mesh_dwells['positions'])} vertices kept")
+    else:
+        print("  Candidate dwells: all mesh vertices in the search area")
+
     mesh_positions = mesh_dwells["positions"]
     mesh_directions = mesh_dwells["directions"]
     mesh_channels = mesh_dwells["channel_ids"]
@@ -372,11 +429,17 @@ def build_mesh(case):
         "mesh_labels": mesh_labels,
         "initial_dwell_times": initial_dwell_times,
         "initial_dose_gy": dose_gy,
+        "candidate_region": candidate_region,
+        "ptv_margin_mm": ptv_margin_mm,
+        "extended_ptv_mask": ext_ptv_mask,
     }
 
 
-def optimize_case(case, rx_params=None, ipsa_params=None):
+def optimize_case(case, rx_params=None, ipsa_params=None, mesh_params=None):
     """Steps 4-12: needle mesh, initial loss, IPSA, optimised dose, evaluation.
+
+    ``mesh_params`` may set ``candidate_region`` (``CANDIDATES_ALL`` or
+    ``CANDIDATES_EXTENDED_PTV``) and ``ptv_margin_mm`` for ``build_mesh``.
 
     Returns
     -------
@@ -385,7 +448,7 @@ def optimize_case(case, rx_params=None, ipsa_params=None):
         losses, and the clinical evaluation report.
     """
     rx_params = copy_prescription_params(rx_params)
-    mesh = build_mesh(case)
+    mesh = build_mesh(case, **(mesh_params or {}))
 
     volume = case["volume"]
     vol_spacing = case["spacing"]
@@ -525,6 +588,10 @@ def optimize_case(case, rx_params=None, ipsa_params=None):
     print(f"  CTV mask(s)      : {ctv_names}")
     print(f"  PTV mask(s)      : {ptv_names}")
     print(f"  OAR mask(s)      : {oar_names}")
+    if mesh["candidate_region"] == CANDIDATES_EXTENDED_PTV:
+        print(f"  Candidate region : {EXTENDED_PTV_NAME} (PTV + {mesh['ptv_margin_mm']:g} mm)")
+    else:
+        print(f"  Candidate region : all mesh vertices in the search area")
     print(f"  Mesh candidates  : {n_mesh}  "
           f"(CTV/PTV {sum(1 for lab in mesh_labels if lab['in_ctv'] or lab['in_ptv'])}, "
           f"OAR {sum(1 for lab in mesh_labels if lab['in_oar'])}, "

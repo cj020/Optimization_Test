@@ -37,6 +37,7 @@ from PyQt5.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QRadioButton,
     QSpinBox,
     QStatusBar,
     QTableWidget,
@@ -66,7 +67,14 @@ except Exception:
 
 from cost_function import copy_prescription_params
 from ipsa import IPSA_DEFAULTS
-from pipeline import load_case, optimize_case
+from needle_mesh import EXTENDED_PTV_NAME
+from pipeline import (
+    CANDIDATES_ALL,
+    CANDIDATES_EXTENDED_PTV,
+    EXTENDED_PTV_MARGIN_MM,
+    load_case,
+    optimize_case,
+)
 
 
 _HEADER_STYLE = (
@@ -86,6 +94,7 @@ _MESH_REGION_COLORS = {
 
 _CLASS_COLORS = {"CTV": "#ff3030", "PTV": "#ff8c00"}
 _OAR_PALETTE = ["#00bfff", "#7fff00", "#ffd700", "#ff69b4", "#9370db", "#40e0d0"]
+_EXTENDED_PTV_COLOR = "#ffcc66"
 
 # Isodose levels as fractions of the prescription dose D_p.
 _ISODOSE_LEVELS = [(0.5, "#00a0ff"), (1.0, "#00ff00"), (1.5, "#ffff00"), (2.0, "#ff0000")]
@@ -188,6 +197,7 @@ class ViewerState:
         self.structure_colors = {}
         self.selected = None                 # row of the highlighted dwell in dwells()
         self.show_structures = True
+        self.show_extended_ptv = True
         self.show_candidates = False
         self.show_dwells = True
         self.show_isodose = True
@@ -213,10 +223,24 @@ class ViewerState:
         if r is not None:
             t = r["optimized_dwell_times"]
             ix = np.flatnonzero(t > 0)
-            regions = [r["mesh_labels"][i].get("region", "") for i in ix]
+            regions = []
+            for i in ix:
+                lab = r["mesh_labels"][i]
+                region = lab.get("region", "")
+                if lab.get("in_extended_ptv"):
+                    region += f" | {EXTENDED_PTV_NAME}"
+                regions.append(region)
             return r["mesh_positions"][ix], t[ix], r["mesh_channels"][ix], regions
         c = self.case
         return c["plan_dwell_positions"], c["plan_dwell_times"], c["plan_dwell_channels"], None
+
+    def extended_ptv(self):
+        """(mask, margin_mm) of the Extended PTV: the optimisation's if run, else the load-time one."""
+        if self.result is not None:
+            return self.result["extended_ptv_mask"], self.result["ptv_margin_mm"]
+        if self.case is not None:
+            return self.case["extended_ptv_mask"], self.case["extended_ptv_margin_mm"]
+        return None, None
 
     def dwell_source(self):
         return "Optimized (IPSA)" if self.result is not None else "Original RTPLAN"
@@ -339,6 +363,15 @@ class SliceView(QFrame):
                                linewidths=1.2, origin=self.origin, extent=extent)
                 legend.append(Line2D([], [], color=color, lw=1.5, label=name))
 
+        ext_mask, ext_margin = s.extended_ptv()
+        if s.show_extended_ptv and ext_mask is not None:
+            m2 = self._slice(ext_mask)
+            if m2.any() and not m2.all():
+                ax.contour(m2.astype(np.uint8), levels=[0.5], colors=[_EXTENDED_PTV_COLOR],
+                           linewidths=1.2, linestyles=":", origin=self.origin, extent=extent)
+            legend.append(Line2D([], [], color=_EXTENDED_PTV_COLOR, lw=1.5, ls=":",
+                                 label=f"{EXTENDED_PTV_NAME} (+{ext_margin:g} mm)"))
+
         if s.show_isodose and s.result is not None:
             dose2 = self._slice(s.result["opt_dose_gy"])
             D_p = s.result["rx_params"]["D_p"]
@@ -446,6 +479,7 @@ class Scene3DView(QFrame):
         layout.addWidget(self.label)
 
         self._structure_actors = []
+        self._ext_ptv_actors = []
         self._candidate_actors = []
         self._dwell_actors = []
 
@@ -486,6 +520,47 @@ class Scene3DView(QFrame):
         c = QColor(hex_color)
         return c.redF(), c.greenF(), c.blueF()
 
+    def _surface_actor(self, mask, color, opacity, wireframe=False):
+        case = self.state.case
+        nz, ny, nx = mask.shape
+        img = vtk.vtkImageData()
+        img.SetDimensions(nx, ny, nz)
+        img.SetSpacing(*[float(v) for v in case["spacing"]])
+        img.SetOrigin(*[float(v) for v in case["origin"]])
+        arr = numpy_support.numpy_to_vtk(
+            np.ascontiguousarray(mask, dtype=np.uint8).ravel(), deep=True,
+            array_type=vtk.VTK_UNSIGNED_CHAR,
+        )
+        img.GetPointData().SetScalars(arr)
+
+        surf = vtk.vtkFlyingEdges3D()
+        surf.SetInputData(img)
+        surf.SetValue(0, 0.5)
+        smooth = vtk.vtkWindowedSincPolyDataFilter()
+        smooth.SetInputConnection(surf.GetOutputPort())
+        smooth.SetNumberOfIterations(15)
+        smooth.SetPassBand(0.1)
+        smooth.NormalizeCoordinatesOn()
+        mapper = vtk.vtkPolyDataMapper()
+        mapper.SetInputConnection(smooth.GetOutputPort())
+        mapper.ScalarVisibilityOff()
+        actor = vtk.vtkActor()
+        actor.SetMapper(mapper)
+        actor.GetProperty().SetColor(*self._rgb(color))
+        actor.GetProperty().SetOpacity(opacity)
+        if wireframe:
+            actor.GetProperty().SetRepresentationToWireframe()
+        return actor
+
+    def _set_extended_ptv(self):
+        self._remove(self._ext_ptv_actors)
+        mask, _margin = self.state.extended_ptv()
+        if mask is None or not mask.any():
+            return
+        actor = self._surface_actor(mask, _EXTENDED_PTV_COLOR, 0.15, wireframe=True)
+        self.renderer.AddActor(actor)
+        self._ext_ptv_actors.append(actor)
+
     # ------------------------------------------------------------------
     def set_case(self):
         """Rebuild structures and candidate needles for the current case."""
@@ -499,36 +574,11 @@ class Scene3DView(QFrame):
             self._render()
             return
 
-        nz, ny, nx = case["volume"].shape
         for name, color in self.state.structure_colors.items():
             mask = case["masks"][name]
             if not mask.any():
                 continue
-            img = vtk.vtkImageData()
-            img.SetDimensions(nx, ny, nz)
-            img.SetSpacing(*[float(v) for v in case["spacing"]])
-            img.SetOrigin(*[float(v) for v in case["origin"]])
-            arr = numpy_support.numpy_to_vtk(
-                np.ascontiguousarray(mask, dtype=np.uint8).ravel(), deep=True,
-                array_type=vtk.VTK_UNSIGNED_CHAR,
-            )
-            img.GetPointData().SetScalars(arr)
-
-            surf = vtk.vtkFlyingEdges3D()
-            surf.SetInputData(img)
-            surf.SetValue(0, 0.5)
-            smooth = vtk.vtkWindowedSincPolyDataFilter()
-            smooth.SetInputConnection(surf.GetOutputPort())
-            smooth.SetNumberOfIterations(15)
-            smooth.SetPassBand(0.1)
-            smooth.NormalizeCoordinatesOn()
-            mapper = vtk.vtkPolyDataMapper()
-            mapper.SetInputConnection(smooth.GetOutputPort())
-            mapper.ScalarVisibilityOff()
-            actor = vtk.vtkActor()
-            actor.SetMapper(mapper)
-            actor.GetProperty().SetColor(*self._rgb(color))
-            actor.GetProperty().SetOpacity(0.25)
+            actor = self._surface_actor(mask, color, 0.25)
             self.renderer.AddActor(actor)
             self._structure_actors.append(actor)
 
@@ -599,6 +649,7 @@ class Scene3DView(QFrame):
             return
         self._remove(self._dwell_actors)
         self._set_candidates()
+        self._set_extended_ptv()
         s = self.state
         if s.case is None:
             self.update_visibility()
@@ -659,6 +710,8 @@ class Scene3DView(QFrame):
         s = self.state
         for a in self._structure_actors:
             a.SetVisibility(s.show_structures)
+        for a in self._ext_ptv_actors:
+            a.SetVisibility(s.show_extended_ptv)
         for a in self._candidate_actors:
             a.SetVisibility(s.show_candidates)
         for a in self._dwell_actors:
@@ -673,13 +726,38 @@ class Scene3DView(QFrame):
 class OptimizationSettingsDialog(QDialog):
     """Cost-function parameters and IPSA iteration settings."""
 
-    def __init__(self, params, ipsa_params, parent=None):
+    def __init__(self, params, ipsa_params, mesh_params, has_ptv=True, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Optimization Settings")
         self._oar_keys = list(params.get("oar_params", {}).keys())
         self._spins = {}
 
         layout = QVBoxLayout(self)
+
+        box = QGroupBox("Candidate dwell positions")
+        v = QVBoxLayout(box)
+        self._all_radio = QRadioButton("All mesh points in the search area")
+        self._ext_radio = QRadioButton(f"Only mesh points inside the {EXTENDED_PTV_NAME}")
+        v.addWidget(self._all_radio)
+        v.addWidget(self._ext_radio)
+        form = QFormLayout()
+        self._margin = QDoubleSpinBox()
+        self._margin.setRange(0.0, 50.0)
+        self._margin.setDecimals(1)
+        self._margin.setSingleStep(0.5)
+        self._margin.setSuffix(" mm")
+        self._margin.setValue(float(mesh_params.get("ptv_margin_mm", EXTENDED_PTV_MARGIN_MM)))
+        form.addRow(f"{EXTENDED_PTV_NAME} margin beyond PTV", self._margin)
+        v.addLayout(form)
+        restricted = mesh_params.get("candidate_region") == CANDIDATES_EXTENDED_PTV
+        self._ext_radio.setChecked(restricted and has_ptv)
+        self._all_radio.setChecked(not (restricted and has_ptv))
+        if not has_ptv:
+            self._ext_radio.setEnabled(False)
+            self._ext_radio.setToolTip("No PTV structure in this case.")
+        self._ext_radio.toggled.connect(self._margin.setEnabled)
+        self._margin.setEnabled(self._ext_radio.isChecked())
+        layout.addWidget(box)
 
         target = QGroupBox("CTV / Target")
         form = QFormLayout(target)
@@ -746,6 +824,10 @@ class OptimizationSettingsDialog(QDialog):
     def ipsa_params(self):
         return {"n_iterations": self._iters.value(), "seed": self._seed.value()}
 
+    def mesh_params(self):
+        region = CANDIDATES_EXTENDED_PTV if self._ext_radio.isChecked() else CANDIDATES_ALL
+        return {"candidate_region": region, "ptv_margin_mm": self._margin.value()}
+
     def _on_reset(self):
         d = copy_prescription_params()
         for key in ("D_p", "D_max", "w_L", "w_H", "D_tol", "w_O"):
@@ -756,6 +838,8 @@ class OptimizationSettingsDialog(QDialog):
                 self._spins[f"{key}.w_O"].setValue(d["oar_params"][key]["w_O"])
         self._iters.setValue(IPSA_DEFAULTS["n_iterations"])
         self._seed.setValue(IPSA_DEFAULTS["seed"])
+        self._all_radio.setChecked(True)
+        self._margin.setValue(EXTENDED_PTV_MARGIN_MM)
 
 
 # ----------------------------------------------------------------------
@@ -773,6 +857,10 @@ class MainWindow(QMainWindow):
         self._worker = None
         self._rx_params = copy_prescription_params()
         self._ipsa_params = {}
+        self._mesh_params = {
+            "candidate_region": CANDIDATES_ALL,
+            "ptv_margin_mm": EXTENDED_PTV_MARGIN_MM,
+        }
 
         self._build_views()
         self._build_docks()
@@ -831,6 +919,7 @@ class MainWindow(QMainWindow):
         self._toggle_actions = {}
         for attr, text in (
             ("show_structures", "Show &Structures"),
+            ("show_extended_ptv", f"Show &{EXTENDED_PTV_NAME}"),
             ("show_candidates", "Show &Candidate Mesh"),
             ("show_dwells", "Show &Dwells"),
             ("show_isodose", "Show &Isodose Lines"),
@@ -1039,12 +1128,16 @@ class MainWindow(QMainWindow):
     # Optimization
     # ------------------------------------------------------------------
     def _on_settings(self):
+        case = self.state.case
         dlg = OptimizationSettingsDialog(
-            self._rx_params, self._ipsa_params, parent=self,
+            self._rx_params, self._ipsa_params, self._mesh_params,
+            has_ptv=case is not None and case["extended_ptv_mask"] is not None,
+            parent=self,
         )
         if dlg.exec_() == QDialog.Accepted:
             self._rx_params = dlg.params()
             self._ipsa_params = dlg.ipsa_params()
+            self._mesh_params = dlg.mesh_params()
             self.status_bar.showMessage("Optimization settings updated.")
 
     def _on_run_optimization(self):
@@ -1053,6 +1146,7 @@ class MainWindow(QMainWindow):
         self._start_worker(
             optimize_case, self._on_optimized, "Running IPSA optimization ...",
             self.state.case, rx_params=self._rx_params, ipsa_params=self._ipsa_params,
+            mesh_params=self._mesh_params,
         )
 
     def _on_optimized(self, result):
@@ -1166,7 +1260,12 @@ class MainWindow(QMainWindow):
 
         bd0, bd1 = result["breakdown_initial"], result["breakdown_opt"]
         hist = result["ipsa_history"]
+        if result["candidate_region"] == CANDIDATES_EXTENDED_PTV:
+            region_text = f"{EXTENDED_PTV_NAME} only (PTV + {result['ptv_margin_mm']:g} mm)"
+        else:
+            region_text = "all mesh points in the search area"
         self._summary_label.setText(
+            f"<b>Candidate region:</b> {region_text}<br>"
             f"<b>{s.dwell_source()}:</b> {len(active)} active / "
             f"{len(all_times)} candidates &nbsp; "
             f"<b>Total time:</b> {times.sum():.2f} s "

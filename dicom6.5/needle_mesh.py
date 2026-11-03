@@ -261,6 +261,58 @@ def count_mesh_labels(labels):
     return region_counts, organ_counts
 
 
+EXTENDED_PTV_NAME = "Extended PTV"
+
+
+def extended_structure_mask(masks, names, spacing, margin_mm=5.0):
+    """Union of the named masks grown outward by ``margin_mm`` (Euclidean, in mm).
+
+    A voxel belongs to the extended structure if its centre is within
+    ``margin_mm`` of a voxel of the original structure. Returns None if no
+    named mask has any voxel.
+    """
+    from scipy.ndimage import distance_transform_edt
+
+    union = None
+    for name in names:
+        if name not in masks:
+            continue
+        union = masks[name].copy() if union is None else (union | masks[name])
+    if union is None or not union.any():
+        return None
+    if margin_mm <= 0:
+        return union
+    dx, dy, dz = _as_xyz(spacing)
+    dist = distance_transform_edt(~union, sampling=(dz, dy, dx))  # mask axes are (z, y, x)
+    return dist <= float(margin_mm) + 1e-6
+
+
+def points_in_mask(points, mask, origin, spacing):
+    """Boolean per point: is the nearest voxel of ``mask`` set (same lookup as label_mesh_points)."""
+    pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+    inside = np.zeros(len(pts), dtype=bool)
+    if len(pts) == 0 or mask is None:
+        return inside
+    vox = np.round((pts - _as_xyz(origin)) / _as_xyz(spacing)).astype(int)
+    ix, iy, iz = vox[:, 0], vox[:, 1], vox[:, 2]
+    nz, ny, nx = mask.shape
+    ok = (iz >= 0) & (iz < nz) & (iy >= 0) & (iy < ny) & (ix >= 0) & (ix < nx)
+    inside[ok] = mask[iz[ok], iy[ok], ix[ok]]
+    return inside
+
+
+def filter_mesh_dwells(mesh_dwells, keep):
+    """Keep only the mesh candidates where ``keep`` is True (order preserved)."""
+    keep = np.asarray(keep, dtype=bool)
+    return {
+        "positions": mesh_dwells["positions"][keep],
+        "directions": mesh_dwells["directions"][keep],
+        "channel_ids": mesh_dwells["channel_ids"][keep],
+        "local_index": mesh_dwells["local_index"][keep],
+        "labels": [lab for lab, k in zip(mesh_dwells["labels"], keep) if k],
+    }
+
+
 def mesh_point_directions(mesh_points):
     """Unit tangent at each vertex of an ordered catheter mesh."""
     pts = np.asarray(mesh_points, dtype=np.float64)
