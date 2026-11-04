@@ -26,7 +26,7 @@ from ui import start_ui
 
 # Patient folder may contain two RTDOSE objects (native TPS + resampled on CT grid).
 # This pipeline compares TG-43 calculated dose only against the native RTDOSE grid.
-DEFAULT_FOLDER = r"C:\Users\jichen\Documents\Cases\us test pt"
+DEFAULT_FOLDER = r"C:\Users\jichen\Documents\Cases\T00060\T00060"
 
 Length_source = 3.5 # active length of the source in mm
 Lambda = 1.113  # Dose-rate constant in cGy/(h·U), where U = µGy·m²/h = cGy·cm²/h
