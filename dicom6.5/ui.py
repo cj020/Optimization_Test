@@ -68,10 +68,12 @@ except Exception:
 
 from cost_function import copy_prescription_params
 from ipsa import IPSA_DEFAULTS
-from needle_mesh import EXTENDED_PTV_NAME
+from needle_mesh import EXTENDED_CTV_NAME, EXTENDED_PTV_NAME
 from pipeline import (
     CANDIDATES_ALL,
+    CANDIDATES_EXTENDED_CTV,
     CANDIDATES_EXTENDED_PTV,
+    EXTENDED_CTV_MARGIN_MM,
     EXTENDED_PTV_MARGIN_MM,
     GRID_1MM,
     GRID_3MM,
@@ -98,6 +100,7 @@ _MESH_REGION_COLORS = {
 _CLASS_COLORS = {"CTV": "#ff3030", "PTV": "#ff8c00"}
 _OAR_PALETTE = ["#00bfff", "#7fff00", "#ffd700", "#ff69b4", "#9370db", "#40e0d0"]
 _EXTENDED_PTV_COLOR = "#ffcc66"
+_EXTENDED_CTV_COLOR = "#66ff99"
 
 # Isodose levels as fractions of the prescription dose D_p.
 _ISODOSE_LEVELS = [(0.5, "#00a0ff"), (1.0, "#00ff00"), (1.5, "#ffff00"), (2.0, "#ff0000")]
@@ -201,6 +204,7 @@ class ViewerState:
         self.selected = None                 # row of the highlighted dwell in dwells()
         self.show_structures = True
         self.show_extended_ptv = True
+        self.show_extended_ctv = True
         self.show_candidates = False
         self.show_dwells = True
         self.show_isodose = True
@@ -232,6 +236,8 @@ class ViewerState:
                 region = lab.get("region", "")
                 if lab.get("in_extended_ptv"):
                     region += f" | {EXTENDED_PTV_NAME}"
+                if lab.get("in_extended_ctv"):
+                    region += f" | {EXTENDED_CTV_NAME}"
                 regions.append(region)
             return r["mesh_positions"][ix], t[ix], r["mesh_channels"][ix], regions
         c = self.case
@@ -243,6 +249,14 @@ class ViewerState:
             return self.result["extended_ptv_mask"], self.result["ptv_margin_mm"]
         if self.case is not None:
             return self.case["extended_ptv_mask"], self.case["extended_ptv_margin_mm"]
+        return None, None
+
+    def extended_ctv(self):
+        """(mask, margin_mm) of the Extended CTV: the optimisation's if run, else the load-time one."""
+        if self.result is not None:
+            return self.result["extended_ctv_mask"], self.result["ctv_margin_mm"]
+        if self.case is not None:
+            return self.case["extended_ctv_mask"], self.case["extended_ctv_margin_mm"]
         return None, None
 
     def dwell_source(self):
@@ -375,6 +389,15 @@ class SliceView(QFrame):
             legend.append(Line2D([], [], color=_EXTENDED_PTV_COLOR, lw=1.5, ls=":",
                                  label=f"{EXTENDED_PTV_NAME} (+{ext_margin:g} mm)"))
 
+        ext_ctv_mask, ext_ctv_margin = s.extended_ctv()
+        if s.show_extended_ctv and ext_ctv_mask is not None:
+            m2 = self._slice(ext_ctv_mask)
+            if m2.any() and not m2.all():
+                ax.contour(m2.astype(np.uint8), levels=[0.5], colors=[_EXTENDED_CTV_COLOR],
+                           linewidths=1.2, linestyles=":", origin=self.origin, extent=extent)
+            legend.append(Line2D([], [], color=_EXTENDED_CTV_COLOR, lw=1.5, ls=":",
+                                 label=f"{EXTENDED_CTV_NAME} (+{ext_ctv_margin:g} mm)"))
+
         if s.show_isodose and s.result is not None:
             dose2 = self._slice(s.result["opt_dose_gy"])
             D_p = s.result["rx_params"]["D_p"]
@@ -483,6 +506,7 @@ class Scene3DView(QFrame):
 
         self._structure_actors = []
         self._ext_ptv_actors = []
+        self._ext_ctv_actors = []
         self._candidate_actors = []
         self._dwell_actors = []
 
@@ -563,6 +587,15 @@ class Scene3DView(QFrame):
         actor = self._surface_actor(mask, _EXTENDED_PTV_COLOR, 0.15, wireframe=True)
         self.renderer.AddActor(actor)
         self._ext_ptv_actors.append(actor)
+
+    def _set_extended_ctv(self):
+        self._remove(self._ext_ctv_actors)
+        mask, _margin = self.state.extended_ctv()
+        if mask is None or not mask.any():
+            return
+        actor = self._surface_actor(mask, _EXTENDED_CTV_COLOR, 0.15, wireframe=True)
+        self.renderer.AddActor(actor)
+        self._ext_ctv_actors.append(actor)
 
     # ------------------------------------------------------------------
     def set_case(self):
@@ -653,6 +686,7 @@ class Scene3DView(QFrame):
         self._remove(self._dwell_actors)
         self._set_candidates()
         self._set_extended_ptv()
+        self._set_extended_ctv()
         s = self.state
         if s.case is None:
             self.update_visibility()
@@ -715,6 +749,8 @@ class Scene3DView(QFrame):
             a.SetVisibility(s.show_structures)
         for a in self._ext_ptv_actors:
             a.SetVisibility(s.show_extended_ptv)
+        for a in self._ext_ctv_actors:
+            a.SetVisibility(s.show_extended_ctv)
         for a in self._candidate_actors:
             a.SetVisibility(s.show_candidates)
         for a in self._dwell_actors:
@@ -729,7 +765,8 @@ class Scene3DView(QFrame):
 class OptimizationSettingsDialog(QDialog):
     """Cost-function parameters and IPSA iteration settings."""
 
-    def __init__(self, params, ipsa_params, mesh_params, has_ptv=True, parent=None):
+    def __init__(self, params, ipsa_params, mesh_params, has_ptv=True,
+                 has_ctv=True, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Optimization Settings")
         self._oar_keys = list(params.get("oar_params", {}).keys())
@@ -741,8 +778,10 @@ class OptimizationSettingsDialog(QDialog):
         v = QVBoxLayout(box)
         self._all_radio = QRadioButton("All mesh points in the search area")
         self._ext_radio = QRadioButton(f"Only mesh points inside the {EXTENDED_PTV_NAME}")
+        self._ext_ctv_radio = QRadioButton(f"Only mesh points inside the {EXTENDED_CTV_NAME}")
         v.addWidget(self._all_radio)
         v.addWidget(self._ext_radio)
+        v.addWidget(self._ext_ctv_radio)
         form = QFormLayout()
         self._margin = QDoubleSpinBox()
         self._margin.setRange(0.0, 50.0)
@@ -751,15 +790,29 @@ class OptimizationSettingsDialog(QDialog):
         self._margin.setSuffix(" mm")
         self._margin.setValue(float(mesh_params.get("ptv_margin_mm", EXTENDED_PTV_MARGIN_MM)))
         form.addRow(f"{EXTENDED_PTV_NAME} margin beyond PTV", self._margin)
+        self._ctv_margin = QDoubleSpinBox()
+        self._ctv_margin.setRange(0.0, 50.0)
+        self._ctv_margin.setDecimals(1)
+        self._ctv_margin.setSingleStep(0.5)
+        self._ctv_margin.setSuffix(" mm")
+        self._ctv_margin.setValue(float(mesh_params.get("ctv_margin_mm", EXTENDED_CTV_MARGIN_MM)))
+        form.addRow(f"{EXTENDED_CTV_NAME} margin beyond CTV", self._ctv_margin)
         v.addLayout(form)
-        restricted = mesh_params.get("candidate_region") == CANDIDATES_EXTENDED_PTV
-        self._ext_radio.setChecked(restricted and has_ptv)
-        self._all_radio.setChecked(not (restricted and has_ptv))
+        region = mesh_params.get("candidate_region", CANDIDATES_ALL)
+        want_ptv = region == CANDIDATES_EXTENDED_PTV and has_ptv
+        want_ctv = region == CANDIDATES_EXTENDED_CTV and has_ctv
+        self._ext_radio.setChecked(want_ptv)
+        self._ext_ctv_radio.setChecked(want_ctv)
+        self._all_radio.setChecked(not want_ptv and not want_ctv)
         if not has_ptv:
             self._ext_radio.setEnabled(False)
             self._ext_radio.setToolTip("No PTV structure in this case.")
-        self._ext_radio.toggled.connect(self._margin.setEnabled)
-        self._margin.setEnabled(self._ext_radio.isChecked())
+        if not has_ctv:
+            self._ext_ctv_radio.setEnabled(False)
+            self._ext_ctv_radio.setToolTip("No CTV structure in this case.")
+        self._ext_radio.toggled.connect(self._update_margin_enabled)
+        self._ext_ctv_radio.toggled.connect(self._update_margin_enabled)
+        self._update_margin_enabled()
         layout.addWidget(box)
 
         target = QGroupBox("CTV / Target")
@@ -827,9 +880,22 @@ class OptimizationSettingsDialog(QDialog):
     def ipsa_params(self):
         return {"n_iterations": self._iters.value(), "seed": self._seed.value()}
 
+    def _update_margin_enabled(self, *_):
+        self._margin.setEnabled(self._ext_radio.isChecked())
+        self._ctv_margin.setEnabled(self._ext_ctv_radio.isChecked())
+
     def mesh_params(self):
-        region = CANDIDATES_EXTENDED_PTV if self._ext_radio.isChecked() else CANDIDATES_ALL
-        return {"candidate_region": region, "ptv_margin_mm": self._margin.value()}
+        if self._ext_radio.isChecked():
+            region = CANDIDATES_EXTENDED_PTV
+        elif self._ext_ctv_radio.isChecked():
+            region = CANDIDATES_EXTENDED_CTV
+        else:
+            region = CANDIDATES_ALL
+        return {
+            "candidate_region": region,
+            "ptv_margin_mm": self._margin.value(),
+            "ctv_margin_mm": self._ctv_margin.value(),
+        }
 
     def _on_reset(self):
         d = copy_prescription_params()
@@ -843,6 +909,8 @@ class OptimizationSettingsDialog(QDialog):
         self._seed.setValue(IPSA_DEFAULTS["seed"])
         self._all_radio.setChecked(True)
         self._margin.setValue(EXTENDED_PTV_MARGIN_MM)
+        self._ctv_margin.setValue(EXTENDED_CTV_MARGIN_MM)
+        self._update_margin_enabled()
 
 
 # ----------------------------------------------------------------------
@@ -863,6 +931,7 @@ class MainWindow(QMainWindow):
         self._mesh_params = {
             "candidate_region": CANDIDATES_ALL,
             "ptv_margin_mm": EXTENDED_PTV_MARGIN_MM,
+            "ctv_margin_mm": EXTENDED_CTV_MARGIN_MM,
         }
         self._grid_mm = GRID_1MM
 
@@ -940,6 +1009,7 @@ class MainWindow(QMainWindow):
         for attr, text in (
             ("show_structures", "Show &Structures"),
             ("show_extended_ptv", f"Show &{EXTENDED_PTV_NAME}"),
+            ("show_extended_ctv", f"Show Extended &CTV"),
             ("show_candidates", "Show &Candidate Mesh"),
             ("show_dwells", "Show &Dwells"),
             ("show_isodose", "Show &Isodose Lines"),
@@ -1166,6 +1236,7 @@ class MainWindow(QMainWindow):
         dlg = OptimizationSettingsDialog(
             self._rx_params, self._ipsa_params, self._mesh_params,
             has_ptv=case is not None and case["extended_ptv_mask"] is not None,
+            has_ctv=case is not None and case["extended_ctv_mask"] is not None,
             parent=self,
         )
         if dlg.exec_() == QDialog.Accepted:
@@ -1296,6 +1367,8 @@ class MainWindow(QMainWindow):
         hist = result["ipsa_history"]
         if result["candidate_region"] == CANDIDATES_EXTENDED_PTV:
             region_text = f"{EXTENDED_PTV_NAME} only (PTV + {result['ptv_margin_mm']:g} mm)"
+        elif result["candidate_region"] == CANDIDATES_EXTENDED_CTV:
+            region_text = f"{EXTENDED_CTV_NAME} only (CTV + {result['ctv_margin_mm']:g} mm)"
         else:
             region_text = "all mesh points in the search area"
         self._summary_label.setText(

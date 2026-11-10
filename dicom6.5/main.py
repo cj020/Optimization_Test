@@ -2,6 +2,7 @@ import sys
 
 from pipeline import (
     CANDIDATES_ALL,
+    CANDIDATES_EXTENDED_CTV,
     CANDIDATES_EXTENDED_PTV,
     GRID_1MM,
     GRID_3MM,
@@ -18,12 +19,18 @@ def run_cli(folder, candidate_region=CANDIDATES_ALL, grid_mm=GRID_1MM):
 
 def main():
     # GUI: the window opens empty; use File > Import DICOM Folder... to load a case.
-    # Batch: python main.py --cli "C:\path\to\patient folder" [--extended-ptv] [--grid 3]
+    # Batch: python main.py --cli "C:\path\to\patient folder" [--extended-ptv|--extended-ctv] [--grid 3]
     #   --extended-ptv restricts candidate dwells to the Extended PTV (PTV + 5 mm).
+    #   --extended-ctv restricts candidate dwells to the Extended CTV (CTV + 5 mm).
     #   --grid 3 resamples CT and US to 3 mm (default is the current 1 mm US grid).
     if len(sys.argv) >= 3 and sys.argv[1] == "--cli":
         extra = sys.argv[3:]
-        region = CANDIDATES_EXTENDED_PTV if "--extended-ptv" in extra else CANDIDATES_ALL
+        if "--extended-ctv" in extra:
+            region = CANDIDATES_EXTENDED_CTV
+        elif "--extended-ptv" in extra:
+            region = CANDIDATES_EXTENDED_PTV
+        else:
+            region = CANDIDATES_ALL
         grid_mm = GRID_1MM
         if "--grid" in extra:
             i = extra.index("--grid")

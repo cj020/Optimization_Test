@@ -262,6 +262,7 @@ def count_mesh_labels(labels):
 
 
 EXTENDED_PTV_NAME = "Extended PTV"
+EXTENDED_CTV_NAME = "Extended CTV"
 
 
 def extended_structure_mask(masks, names, spacing, margin_mm=5.0):
