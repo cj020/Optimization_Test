@@ -33,6 +33,10 @@ CANDIDATES_ALL = "all"                    # every mesh vertex in the search area
 CANDIDATES_EXTENDED_PTV = "extended_ptv"  # only vertices inside the Extended PTV
 EXTENDED_PTV_MARGIN_MM = 5.0              # Extended PTV = PTV + this margin beyond its boundary
 
+# Image / dose-calculation grid. 1 mm is the current default (US only).
+GRID_1MM = 1.0
+GRID_3MM = 3.0
+
 
 class PipelineError(RuntimeError):
     """A case cannot be planned (missing RTSTRUCT / RTPLAN, empty mesh, ...)."""
@@ -65,8 +69,15 @@ def _print_dose_summary(dose_gy):
         print(f"  Non-zero voxels : {len(nonzero)}")
 
 
-def load_case(folder):
+def load_case(folder, grid_mm=GRID_1MM):
     """Steps 1-5: load DICOM, build masks, mesh needles, uniform-time TG-43 dose.
+
+    Parameters
+    ----------
+    grid_mm : float
+        Target isotropic voxel size (mm). ``GRID_1MM`` keeps the current
+        behaviour (US downsampled to 1 mm; CT left at native spacing).
+        ``GRID_3MM`` downsamples both CT and US to 3 mm.
 
     Returns
     -------
@@ -84,7 +95,14 @@ def load_case(folder):
 
     # Native TRUS is typically ~0.2 mm in-plane. TG-43 / IPSA run on a 1 mm
     # calculation grid, matching typical CT voxel size.
-    if modality == "US":
+    # GRID_3MM downsamples both CT and US; GRID_1MM leaves CT unchanged.
+    if grid_mm == GRID_3MM:
+        print(f"\n  Resampling {modality} volume toward {grid_mm:g} mm "
+              f"for dose calculation.")
+        volume, spacing, origin = resample_volume_to_spacing(
+            volume, spacing, origin, target_mm=grid_mm
+        )
+    elif modality == "US":
         print("\n  US native grid is finer than 1 mm; downsampling for dose calculation.")
         volume, spacing, origin = resample_volume_to_spacing(
             volume, spacing, origin, target_mm=1.0
@@ -232,6 +250,7 @@ def load_case(folder):
         "plan_dwell_positions": dwell_positions,
         "plan_dwell_times": dwell_times,
         "plan_dwell_channels": channels,
+        "grid_mm": float(grid_mm),
     }
 
 
@@ -584,7 +603,8 @@ def optimize_case(case, rx_params=None, ipsa_params=None, mesh_params=None):
     print(f"\n{'='*70}")
     print("SUMMARY")
     print(f"{'='*70}")
-    print(f"  {modality} grid          : {volume.shape}  spacing {tuple(vol_spacing)} mm")
+    print(f"  {modality} grid          : {volume.shape}  spacing {tuple(vol_spacing)} mm"
+          f"  (target {case.get('grid_mm', GRID_1MM):g} mm)")
     print(f"  CTV mask(s)      : {ctv_names}")
     print(f"  PTV mask(s)      : {ptv_names}")
     print(f"  OAR mask(s)      : {oar_names}")

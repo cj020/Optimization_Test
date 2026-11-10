@@ -20,6 +20,7 @@ from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QAction,
+    QActionGroup,
     QApplication,
     QDialog,
     QDialogButtonBox,
@@ -72,6 +73,8 @@ from pipeline import (
     CANDIDATES_ALL,
     CANDIDATES_EXTENDED_PTV,
     EXTENDED_PTV_MARGIN_MM,
+    GRID_1MM,
+    GRID_3MM,
     load_case,
     optimize_case,
 )
@@ -861,6 +864,7 @@ class MainWindow(QMainWindow):
             "candidate_region": CANDIDATES_ALL,
             "ptv_margin_mm": EXTENDED_PTV_MARGIN_MM,
         }
+        self._grid_mm = GRID_1MM
 
         self._build_views()
         self._build_docks()
@@ -897,6 +901,22 @@ class MainWindow(QMainWindow):
         self._export_action.setShortcut("Ctrl+S")
         self._export_action.triggered.connect(self._on_export)
         file_menu.addAction(self._export_action)
+
+        file_menu.addSeparator()
+        grid_menu = file_menu.addMenu("Image &Grid")
+        grid_group = QActionGroup(self)
+        grid_group.setExclusive(True)
+        self._grid_1_action = QAction("1 mm × 1 mm × 1 mm (current)", self)
+        self._grid_1_action.setCheckable(True)
+        self._grid_1_action.setChecked(True)
+        self._grid_1_action.setActionGroup(grid_group)
+        self._grid_1_action.triggered.connect(lambda: self._set_grid_mm(GRID_1MM))
+        grid_menu.addAction(self._grid_1_action)
+        self._grid_3_action = QAction("3 mm × 3 mm × 3 mm", self)
+        self._grid_3_action.setCheckable(True)
+        self._grid_3_action.setActionGroup(grid_group)
+        self._grid_3_action.triggered.connect(lambda: self._set_grid_mm(GRID_3MM))
+        grid_menu.addAction(self._grid_3_action)
 
         file_menu.addSeparator()
         quit_action = QAction("&Quit", self)
@@ -1030,6 +1050,8 @@ class MainWindow(QMainWindow):
         self._settings_action.setEnabled(has_case and not busy)
         self._run_action.setEnabled(has_case and not busy)
         self._export_action.setEnabled(has_case and not busy)
+        self._grid_1_action.setEnabled(not busy)
+        self._grid_3_action.setEnabled(not busy)
 
     def _start_worker(self, fn, on_success, message, *args, **kwargs):
         self._worker = _Worker(fn, *args, **kwargs)
@@ -1091,7 +1113,18 @@ class MainWindow(QMainWindow):
         if not folder:
             return
         self._start_worker(load_case, self._on_case_loaded,
-                           f"Loading {folder} ...", folder)
+                           f"Loading {folder} ...", folder, grid_mm=self._grid_mm)
+
+    def _set_grid_mm(self, grid_mm):
+        self._grid_mm = grid_mm
+        if self.state.case is None:
+            self.status_bar.showMessage(
+                f"Image grid set to {grid_mm:g} mm -- use File > Import DICOM Folder... to load."
+            )
+        else:
+            self.status_bar.showMessage(
+                f"Image grid set to {grid_mm:g} mm -- re-import the DICOM folder to apply it."
+            )
 
     def _on_case_loaded(self, case):
         s = self.state
@@ -1118,6 +1151,7 @@ class MainWindow(QMainWindow):
         times = case["plan_dwell_times"]
         self.status_bar.showMessage(
             f"Loaded {basename}  ({case['modality']} {nx}x{ny}x{nz} voxels, "
+            f"spacing {tuple(float(v) for v in case['spacing'])} mm, "
             f"RTPLAN: {len(times)} dwells on "
             f"{len(np.unique(case['plan_dwell_channels']))} channels, "
             f"total time {times.sum():.1f} s) "
