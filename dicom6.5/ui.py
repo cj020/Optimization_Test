@@ -399,7 +399,8 @@ class SliceView(QFrame):
                                  label=f"{EXTENDED_CTV_NAME} (+{ext_ctv_margin:g} mm)"))
 
         if s.show_isodose and s.result is not None:
-            dose2 = self._slice(s.result["opt_dose_gy"])
+            dose = s.result.get("opt_dose_gy_display", s.result["opt_dose_gy"])
+            dose2 = self._slice(dose)
             D_p = s.result["rx_params"]["D_p"]
             for frac, color in _ISODOSE_LEVELS:
                 level = frac * D_p
@@ -972,10 +973,10 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self._export_action)
 
         file_menu.addSeparator()
-        grid_menu = file_menu.addMenu("Image &Grid")
+        grid_menu = file_menu.addMenu("Dose / Calculation &Grid")
         grid_group = QActionGroup(self)
         grid_group.setExclusive(True)
-        self._grid_1_action = QAction("1 mm × 1 mm × 1 mm (current)", self)
+        self._grid_1_action = QAction("1 mm × 1 mm × 1 mm", self)
         self._grid_1_action.setCheckable(True)
         self._grid_1_action.setChecked(True)
         self._grid_1_action.setActionGroup(grid_group)
@@ -1183,18 +1184,14 @@ class MainWindow(QMainWindow):
         if not folder:
             return
         self._start_worker(load_case, self._on_case_loaded,
-                           f"Loading {folder} ...", folder, grid_mm=self._grid_mm)
+                           f"Loading {folder} ...", folder)
 
     def _set_grid_mm(self, grid_mm):
         self._grid_mm = grid_mm
-        if self.state.case is None:
-            self.status_bar.showMessage(
-                f"Image grid set to {grid_mm:g} mm -- use File > Import DICOM Folder... to load."
-            )
-        else:
-            self.status_bar.showMessage(
-                f"Image grid set to {grid_mm:g} mm -- re-import the DICOM folder to apply it."
-            )
+        self.status_bar.showMessage(
+            f"Dose / calculation grid set to {grid_mm:g} mm "
+            f"(image display stays native; applies at the next optimization)."
+        )
 
     def _on_case_loaded(self, case):
         s = self.state
@@ -1251,7 +1248,7 @@ class MainWindow(QMainWindow):
         self._start_worker(
             optimize_case, self._on_optimized, "Running IPSA optimization ...",
             self.state.case, rx_params=self._rx_params, ipsa_params=self._ipsa_params,
-            mesh_params=self._mesh_params,
+            mesh_params={**self._mesh_params, "grid_mm": self._grid_mm},
         )
 
     def _on_optimized(self, result):
@@ -1372,6 +1369,10 @@ class MainWindow(QMainWindow):
         else:
             region_text = "all mesh points in the search area"
         self._summary_label.setText(
+            f"<b>Calculation grid:</b> {result.get('grid_mm', 1):g} mm "
+            f"({tuple(int(n) for n in result['opt_dose_gy'].shape)} voxels) "
+            f"-- display is native "
+            f"{tuple(int(n) for n in s.case['volume'].shape)}<br>"
             f"<b>Candidate region:</b> {region_text}<br>"
             f"<b>{s.dwell_source()}:</b> {len(active)} active / "
             f"{len(all_times)} candidates &nbsp; "

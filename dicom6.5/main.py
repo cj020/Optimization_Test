@@ -13,8 +13,11 @@ from pipeline import (
 
 def run_cli(folder, candidate_region=CANDIDATES_ALL, grid_mm=GRID_1MM):
     """Headless run: load the case and optimise with the default parameters."""
-    case = load_case(folder, grid_mm=grid_mm)
-    optimize_case(case, mesh_params={"candidate_region": candidate_region})
+    case = load_case(folder)
+    optimize_case(
+        case,
+        mesh_params={"candidate_region": candidate_region, "grid_mm": grid_mm},
+    )
 
 
 def main():
@@ -22,7 +25,7 @@ def main():
     # Batch: python main.py --cli "C:\path\to\patient folder" [--extended-ptv|--extended-ctv] [--grid 3]
     #   --extended-ptv restricts candidate dwells to the Extended PTV (PTV + 5 mm).
     #   --extended-ctv restricts candidate dwells to the Extended CTV (CTV + 5 mm).
-    #   --grid 3 resamples CT and US to 3 mm (default is the current 1 mm US grid).
+    #   --grid 3 uses a 3 mm dose / IPSA / criteria grid (display stays native; default 1 mm).
     if len(sys.argv) >= 3 and sys.argv[1] == "--cli":
         extra = sys.argv[3:]
         if "--extended-ctv" in extra:

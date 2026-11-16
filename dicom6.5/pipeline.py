@@ -63,6 +63,71 @@ def _print_dose_table(dose_gy, structures, masks):
               f"{d.min():>10.4f} {d.mean():>11.4f} {d.max():>10.4f} {d95:>10.4f}")
 
 
+def resample_field_to_grid(field, src_origin, src_spacing, dst_origin, dst_spacing, dst_shape):
+    """Interpolate a 3-D field from one voxel grid onto another (world mm).
+
+    Used to overlay a coarse dose grid on the native image for display.
+    """
+    from scipy.ndimage import map_coordinates
+
+    field = np.asarray(field, dtype=np.float64)
+    src_origin = np.asarray(src_origin, dtype=np.float64).reshape(3)
+    src_spacing = np.asarray(src_spacing, dtype=np.float64).reshape(3)
+    dst_origin = np.asarray(dst_origin, dtype=np.float64).reshape(3)
+    dst_spacing = np.asarray(dst_spacing, dtype=np.float64).reshape(3)
+    dst_shape = tuple(int(n) for n in dst_shape)
+    if (field.shape == dst_shape
+            and np.allclose(src_origin, dst_origin)
+            and np.allclose(src_spacing, dst_spacing)):
+        return field.copy()
+
+    nz, ny, nx = dst_shape
+    z = dst_origin[2] + np.arange(nz) * dst_spacing[2]
+    y = dst_origin[1] + np.arange(ny) * dst_spacing[1]
+    x = dst_origin[0] + np.arange(nx) * dst_spacing[0]
+    iz = (z - src_origin[2]) / src_spacing[2]
+    iy = (y - src_origin[1]) / src_spacing[1]
+    ix = (x - src_origin[0]) / src_spacing[0]
+    zz, yy, xx = np.meshgrid(iz, iy, ix, indexing="ij")
+    coords = np.vstack([zz.ravel(), yy.ravel(), xx.ravel()])
+    out = map_coordinates(field, coords, order=1, mode="nearest")
+    return out.reshape(dst_shape)
+
+
+def make_calc_grid(case, grid_mm=GRID_1MM):
+    """Resample the native image and re-rasterize structures for dose / IPSA / criteria.
+
+    Display keeps ``case['volume']`` at native spacing. This grid is used only
+    for TG-43, optimisation, and the clinical evaluation.
+    """
+    volume, spacing, origin = resample_volume_to_spacing(
+        case["volume"], case["spacing"], case["origin"], target_mm=grid_mm,
+    )
+    spacing = np.asarray(spacing, dtype=np.float64)
+    origin = np.asarray(origin, dtype=np.float64)
+    print(f"\n  Calculation grid ({grid_mm:g} mm target) for {case['modality']}:")
+    print(f"    Native  {case['volume'].shape} @ {tuple(float(v) for v in case['spacing'])} mm")
+    print(f"    Calc    {volume.shape} @ {tuple(float(v) for v in spacing)} mm")
+    print(f"    Rasterizing structure masks on the calculation grid {volume.shape} ...")
+    masks = build_structure_masks(
+        case["structures"],
+        grid_origin=origin,
+        grid_spacing=spacing,
+        grid_shape=volume.shape,
+        classifications=["CTV", "PTV", "OAR"],
+    )
+    voxel_vol_mm3 = float(np.prod(spacing))
+    print(f"    {'Structure':<30} {'Class':<6} {'Voxels':>10} {'Volume (cm3)':>14}")
+    print(f"    {'-'*30} {'-'*6} {'-'*10} {'-'*14}")
+    for s in case["structures"]:
+        if s["name"] not in masks:
+            continue
+        n_vox = int(masks[s["name"]].sum())
+        print(f"    {s['name']:<30} {s['classification']:<6} {n_vox:>10} "
+              f"{n_vox * voxel_vol_mm3 / 1000.0:>14.2f}")
+    return volume, spacing, origin, masks
+
+
 def _print_dose_summary(dose_gy):
     print(f"\n  Dose grid shape : {dose_gy.shape}")
     print(f"  Max dose        : {dose_gy.max():.4f} Gy")
@@ -72,51 +137,32 @@ def _print_dose_summary(dose_gy):
         print(f"  Non-zero voxels : {len(nonzero)}")
 
 
-def load_case(folder, grid_mm=GRID_1MM):
-    """Steps 1-5: load DICOM, build masks, mesh needles, uniform-time TG-43 dose.
+def load_case(folder):
+    """Load DICOM on the native image grid for display.
 
-    Parameters
-    ----------
-    grid_mm : float
-        Target isotropic voxel size (mm). ``GRID_1MM`` keeps the current
-        behaviour (US downsampled to 1 mm; CT left at native spacing).
-        ``GRID_3MM`` downsamples both CT and US to 3 mm.
+    Dose calculation, IPSA, and clinical criteria use a separate 1 mm or
+    3 mm grid created later in ``build_mesh`` / ``optimize_case``.
 
     Returns
     -------
     case : dict
-        Everything the optimisation step and the viewer need.
+        Native volume, structure masks, RTPLAN dwells, and related metadata.
     """
     # Patient folder may contain two RTDOSE objects (native TPS + resampled on CT grid).
     # This pipeline compares TG-43 calculated dose only against the native RTDOSE grid.
 
     # ------------------------------------------------------------------
-    # 1. Load all DICOM data
+    # 1. Load all DICOM data (native spacing — used for display)
     # ------------------------------------------------------------------
 
     volume, spacing, origin, direction, rtstruct, rtplan, rtdose, dose_ds, modality = load_dicom(folder)
-
-    # Native TRUS is typically ~0.2 mm in-plane. TG-43 / IPSA run on a 1 mm
-    # calculation grid, matching typical CT voxel size.
-    # GRID_3MM downsamples both CT and US; GRID_1MM leaves CT unchanged.
-    if grid_mm == GRID_3MM:
-        print(f"\n  Resampling {modality} volume toward {grid_mm:g} mm "
-              f"for dose calculation.")
-        volume, spacing, origin = resample_volume_to_spacing(
-            volume, spacing, origin, target_mm=grid_mm
-        )
-    elif modality == "US":
-        print("\n  US native grid is finer than 1 mm; downsampling for dose calculation.")
-        volume, spacing, origin = resample_volume_to_spacing(
-            volume, spacing, origin, target_mm=1.0
-        )
 
     vol_shape = volume.shape          # (nz, ny, nx)
     vol_spacing = np.array(spacing)   # (dx, dy, dz) mm
     vol_origin = np.array(origin)     # (x0, y0, z0) mm
 
     print(f"\n{'='*70}")
-    print(f"{modality} VOLUME")
+    print(f"{modality} VOLUME (native, for display)")
     print(f"{'='*70}")
     print(f"  Shape (nz, ny, nx) : {vol_shape}")
     print(f"  Spacing (dx,dy,dz) : {vol_spacing} mm")
@@ -266,13 +312,13 @@ def load_case(folder, grid_mm=GRID_1MM):
         "plan_dwell_positions": dwell_positions,
         "plan_dwell_times": dwell_times,
         "plan_dwell_channels": channels,
-        "grid_mm": float(grid_mm),
     }
 
 
 def build_mesh(case, candidate_region=CANDIDATES_ALL,
                ptv_margin_mm=EXTENDED_PTV_MARGIN_MM,
-               ctv_margin_mm=EXTENDED_CTV_MARGIN_MM):
+               ctv_margin_mm=EXTENDED_CTV_MARGIN_MM,
+               grid_mm=GRID_1MM):
     """Steps 4-5: mesh the RTPLAN channels and compute the uniform-time TG-43 dose.
 
     Parameters
@@ -283,6 +329,9 @@ def build_mesh(case, candidate_region=CANDIDATES_ALL,
         Extended PTV (PTV plus ``ptv_margin_mm`` beyond its boundary);
         ``CANDIDATES_EXTENDED_CTV`` keeps only vertices inside the
         Extended CTV (CTV plus ``ctv_margin_mm`` beyond its boundary).
+    grid_mm : float
+        Target voxel size (mm) for TG-43 / IPSA / clinical criteria
+        (``GRID_1MM`` or ``GRID_3MM``). The displayed image stays native.
 
     Returns
     -------
@@ -433,12 +482,15 @@ def build_mesh(case, candidate_region=CANDIDATES_ALL,
     if n_mesh == 0:
         raise PipelineError("No mesh points to use as candidate dwells.")
 
+    calc_volume, calc_spacing, calc_origin, calc_masks = make_calc_grid(case, grid_mm)
+
     # ------------------------------------------------------------------
     # 5. TG-43 dose calculation (uniform time on every mesh vertex)
     # ------------------------------------------------------------------
 
     print(f"\n{'='*70}")
-    print(f"TG-43 DOSE CALCULATION (uniform time on all mesh vertices, on {modality} grid)")
+    print(f"TG-43 DOSE CALCULATION (uniform time on all mesh vertices, "
+          f"{grid_mm:g} mm calculation grid)")
     print(f"{'='*70}")
 
     orig_active = dwell_times[dwell_times > 0]
@@ -462,9 +514,9 @@ def build_mesh(case, candidate_region=CANDIDATES_ALL,
         dwell_pos=mesh_positions,
         norm_dwell_dir=mesh_directions,
         dwell_times=initial_dwell_times,
-        volume=volume,
-        spacing=tuple(vol_spacing),
-        origin=tuple(vol_origin),
+        volume=calc_volume,
+        spacing=tuple(calc_spacing),
+        origin=tuple(calc_origin),
         L=Length_source,
         S_k=S_k,
         Lambda=Lambda,
@@ -473,7 +525,7 @@ def build_mesh(case, candidate_region=CANDIDATES_ALL,
     dose_gy = total_dose_cgy / 100.0   # cGy -> Gy
 
     _print_dose_summary(dose_gy)
-    _print_dose_table(dose_gy, structures, masks)
+    _print_dose_table(dose_gy, structures, calc_masks)
 
     return {
         "orig_mean": orig_mean,
@@ -491,6 +543,11 @@ def build_mesh(case, candidate_region=CANDIDATES_ALL,
         "ctv_margin_mm": ctv_margin_mm,
         "extended_ptv_mask": ext_ptv_mask,
         "extended_ctv_mask": ext_ctv_mask,
+        "grid_mm": float(grid_mm),
+        "calc_volume": calc_volume,
+        "calc_spacing": calc_spacing,
+        "calc_origin": calc_origin,
+        "calc_masks": calc_masks,
     }
 
 
@@ -498,8 +555,10 @@ def optimize_case(case, rx_params=None, ipsa_params=None, mesh_params=None):
     """Steps 4-12: needle mesh, initial loss, IPSA, optimised dose, evaluation.
 
     ``mesh_params`` may set ``candidate_region`` (``CANDIDATES_ALL``,
-    ``CANDIDATES_EXTENDED_PTV``, or ``CANDIDATES_EXTENDED_CTV``) and
-    ``ptv_margin_mm`` / ``ctv_margin_mm`` for ``build_mesh``.
+    ``CANDIDATES_EXTENDED_PTV``, or ``CANDIDATES_EXTENDED_CTV``),
+    ``ptv_margin_mm`` / ``ctv_margin_mm``, and ``grid_mm`` (1 or 3)
+    for ``build_mesh``. Dose, IPSA, and clinical criteria use that
+    calculation grid; the displayed image stays at native spacing.
 
     Returns
     -------
@@ -510,10 +569,10 @@ def optimize_case(case, rx_params=None, ipsa_params=None, mesh_params=None):
     rx_params = copy_prescription_params(rx_params)
     mesh = build_mesh(case, **(mesh_params or {}))
 
-    volume = case["volume"]
-    vol_spacing = case["spacing"]
-    vol_origin = case["origin"]
-    masks = case["masks"]
+    volume = mesh["calc_volume"]
+    vol_spacing = mesh["calc_spacing"]
+    vol_origin = mesh["calc_origin"]
+    masks = mesh["calc_masks"]
     structures = case["structures"]
     ctv_names = case["ctv_names"]
     ptv_names = case["ptv_names"]
@@ -576,7 +635,8 @@ def optimize_case(case, rx_params=None, ipsa_params=None, mesh_params=None):
     # ------------------------------------------------------------------
 
     print(f"\n{'='*70}")
-    print(f"TG-43 DOSE CALCULATION (optimised mesh dwells, on {modality} grid)")
+    print(f"TG-43 DOSE CALCULATION (optimised mesh dwells, "
+          f"{mesh['grid_mm']:g} mm calculation grid)")
     print(f"{'='*70}")
 
     opt_dose_cgy = dose_contribution(
@@ -617,6 +677,11 @@ def optimize_case(case, rx_params=None, ipsa_params=None, mesh_params=None):
     )
     print_evaluation_report(eval_report, D_p=rx_params["D_p"])
 
+    opt_dose_gy_display = resample_field_to_grid(
+        opt_dose_gy, vol_origin, vol_spacing,
+        case["origin"], case["spacing"], case["volume"].shape,
+    )
+
     # ------------------------------------------------------------------
     # 11. RTDOSE (loaded for future reference, not used in optimization)
     # ------------------------------------------------------------------
@@ -644,8 +709,10 @@ def optimize_case(case, rx_params=None, ipsa_params=None, mesh_params=None):
     print(f"\n{'='*70}")
     print("SUMMARY")
     print(f"{'='*70}")
-    print(f"  {modality} grid          : {volume.shape}  spacing {tuple(vol_spacing)} mm"
-          f"  (target {case.get('grid_mm', GRID_1MM):g} mm)")
+    print(f"  Native image     : {case['volume'].shape}  "
+          f"spacing {tuple(float(v) for v in case['spacing'])} mm")
+    print(f"  {modality} calc grid     : {volume.shape}  spacing {tuple(vol_spacing)} mm"
+          f"  (target {mesh['grid_mm']:g} mm)")
     print(f"  CTV mask(s)      : {ctv_names}")
     print(f"  PTV mask(s)      : {ptv_names}")
     print(f"  OAR mask(s)      : {oar_names}")
@@ -676,6 +743,7 @@ def optimize_case(case, rx_params=None, ipsa_params=None, mesh_params=None):
         "rx_params": rx_params,
         "optimized_dwell_times": optimized_dwell_times,
         "opt_dose_gy": opt_dose_gy,
+        "opt_dose_gy_display": opt_dose_gy_display,
         "ipsa_history": ipsa_history,
         "L_initial": L,
         "L_opt": L_opt,
