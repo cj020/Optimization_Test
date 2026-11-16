@@ -973,7 +973,12 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self._export_action)
 
         file_menu.addSeparator()
-        grid_menu = file_menu.addMenu("Dose / Calculation &Grid")
+        quit_action = QAction("&Quit", self)
+        quit_action.setShortcut("Ctrl+Q")
+        quit_action.triggered.connect(self.close)
+        file_menu.addAction(quit_action)
+
+        grid_menu = menu_bar.addMenu("Dose / Calculation &Grid")
         grid_group = QActionGroup(self)
         grid_group.setExclusive(True)
         self._grid_1_action = QAction("1 mm × 1 mm × 1 mm", self)
@@ -987,12 +992,6 @@ class MainWindow(QMainWindow):
         self._grid_3_action.setActionGroup(grid_group)
         self._grid_3_action.triggered.connect(lambda: self._set_grid_mm(GRID_3MM))
         grid_menu.addAction(self._grid_3_action)
-
-        file_menu.addSeparator()
-        quit_action = QAction("&Quit", self)
-        quit_action.setShortcut("Ctrl+Q")
-        quit_action.triggered.connect(self.close)
-        file_menu.addAction(quit_action)
 
         optim_menu = menu_bar.addMenu("&Optimization")
         self._settings_action = QAction("Optimization &Settings...", self)
