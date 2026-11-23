@@ -11,6 +11,8 @@ PRESCRIPTION_PARAMS = {
     "D_max": 30.00,     # Max tolerable dose in target (Gy)
     "w_L": 15.0,        # Impact factor for target under-dose
     "w_H": 5.0,         # Impact factor for target over-dose
+    # 100% dose used only to convert table % ↔ cGy (Oncentra-style Rx)
+    "D_rx": 15.00,      # Prescription for % display (Gy); 1500 cGy
     # Default OAR (used when structure name does not match oar_params)
     "D_tol": 11.25,     # Default OAR tolerance dose (Gy)
     "w_O": 5.0,         # Default OAR over-dose impact factor
@@ -20,17 +22,48 @@ PRESCRIPTION_PARAMS = {
         "bladder": {"D_tol": 11.25, "w_O": 5.0},    # 1125 cGy, impact 5
         "rectum":  {"D_tol": 11.25, "w_O": 29.3},   # 1125 cGy, impact 29.3
     },
+    # Per-target overrides (CTV/PTV) — same matching rule as oar_params
+    "target_params": {},
+    # Structure name → bool; missing names are treated as enabled
+    "voi_enabled": {},
+    # Extra target names (typically PTVs) included in the CTV penalty
+    "extra_target_names": [],
 }
 
 
 def copy_prescription_params(params=None):
     """Return a deep copy of prescription / penalty parameters."""
     src = PRESCRIPTION_PARAMS if params is None else params
-    copied = {key: value for key, value in src.items() if key != "oar_params"}
+    skip = {"oar_params", "target_params", "voi_enabled", "extra_target_names", "voi_settings"}
+    copied = {key: value for key, value in src.items() if key not in skip}
     copied["oar_params"] = {
         name: dict(vals) for name, vals in src.get("oar_params", {}).items()
     }
+    copied["target_params"] = {
+        name: dict(vals) for name, vals in src.get("target_params", {}).items()
+    }
+    copied["voi_enabled"] = dict(src.get("voi_enabled", {}))
+    copied["extra_target_names"] = list(src.get("extra_target_names", []))
+    if "voi_settings" in src:
+        copied["voi_settings"] = [dict(row) for row in src["voi_settings"]]
     return copied
+
+
+def _voi_enabled(name, p):
+    """True unless the VOI table explicitly disabled this structure."""
+    enabled = p.get("voi_enabled") or {}
+    if name in enabled:
+        return bool(enabled[name])
+    return bool(enabled.get(name.lower(), True))
+
+
+def _target_limits(name, p):
+    """Resolve (D_p, D_max, w_L, w_H) for a target by name, falling back to globals."""
+    name_lower = name.lower()
+    for key, vals in p.get("target_params", {}).items():
+        if key in name_lower:
+            return vals["D_p"], vals["D_max"], vals["w_L"], vals["w_H"]
+    return p["D_p"], p["D_max"], p["w_L"], p["w_H"]
 
 
 def _oar_limits(name, p):
@@ -126,22 +159,30 @@ def cost_function(dose_gy, masks, ctv_names, oar_names, params=None):
             merged = dict(PRESCRIPTION_PARAMS["oar_params"])
             merged.update(params["oar_params"])
             p["oar_params"] = merged
-
-    D_p   = p["D_p"]
-    D_max = p["D_max"]
-    w_L   = p["w_L"]
-    w_H   = p["w_H"]
+        if "target_params" in (params or {}):
+            merged_t = dict(PRESCRIPTION_PARAMS.get("target_params", {}))
+            merged_t.update(params["target_params"])
+            p["target_params"] = merged_t
 
     total_cost = 0.0
     breakdown = {}
 
-    for name in ctv_names:
+    extra = list(p.get("extra_target_names") or [])
+    target_names = list(ctv_names)
+    for name in extra:
+        if name not in target_names:
+            target_names.append(name)
+
+    for name in target_names:
+        if not _voi_enabled(name, p):
+            continue
         if name not in masks:
             continue
         m = masks[name] # here m is a Boolean 3-D array: m.shape = (nz, ny, nx)
         n_vox = int(m.sum())
         if n_vox == 0:
             continue
+        D_p, D_max, w_L, w_H = _target_limits(name, p)
         d = dose_gy[m] # extracts only the dose values inside the CTV
         pen = penalty_target(d, D_p, D_max, w_L, w_H)
         struct_cost = float(pen.sum())
@@ -161,6 +202,8 @@ def cost_function(dose_gy, masks, ctv_names, oar_names, params=None):
         }
 
     for name in oar_names:
+        if not _voi_enabled(name, p):
+            continue
         if name not in masks:
             continue
         m = masks[name]

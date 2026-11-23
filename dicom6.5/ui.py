@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
     QAction,
     QActionGroup,
     QApplication,
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QDockWidget,
@@ -31,6 +32,7 @@ from PyQt5.QtWidgets import (
     QFrame,
     QGridLayout,
     QGroupBox,
+    QHBoxLayout,
     QHeaderView,
     QLabel,
     QMainWindow,
@@ -66,7 +68,7 @@ try:
 except Exception:
     _HAS_VTK = False
 
-from cost_function import copy_prescription_params
+from cost_function import PRESCRIPTION_PARAMS, copy_prescription_params, _oar_limits
 from ipsa import IPSA_DEFAULTS
 from needle_mesh import EXTENDED_CTV_NAME, EXTENDED_PTV_NAME
 from pipeline import (
@@ -793,14 +795,19 @@ class Scene3DView(QFrame):
 # ----------------------------------------------------------------------
 
 class OptimizationSettingsDialog(QDialog):
-    """Cost-function parameters and IPSA iteration settings."""
+    """DVHO-style VOI table, candidate-dwell options, and IPSA settings."""
+
+    _COL_ON, _COL_NAME, _COL_TYPE, _COL_CLASS, _COL_PCT, _COL_CGY, _COL_W = range(7)
+    _HEADERS = ["", "Name", "Type", "Class", "Dose limit [%]", "Dose limit [cGy]", "Imp. factor"]
 
     def __init__(self, params, ipsa_params, mesh_params, has_ptv=True,
-                 has_ctv=True, parent=None):
+                 has_ctv=True, case=None, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Optimization Settings")
-        self._oar_keys = list(params.get("oar_params", {}).keys())
-        self._spins = {}
+        self.setWindowTitle("DVHO optimization settings")
+        self.resize(980, 680)
+        self._params = copy_prescription_params(params)
+        self._case = case
+        self._updating = False
 
         layout = QVBoxLayout(self)
 
@@ -845,27 +852,72 @@ class OptimizationSettingsDialog(QDialog):
         self._update_margin_enabled()
         layout.addWidget(box)
 
-        target = QGroupBox("CTV / Target")
-        form = QFormLayout(target)
-        self._add(form, "D_p", "D_p  prescription (Gy)", params["D_p"])
-        self._add(form, "D_max", "D_max  max target dose (Gy)", params["D_max"])
-        self._add(form, "w_L", "w_L  underdose weight", params["w_L"])
-        self._add(form, "w_H", "w_H  overdose weight", params["w_H"])
-        layout.addWidget(target)
+        voi = QGroupBox("VOI Settings")
+        voi_l = QVBoxLayout(voi)
+        rx_row = QHBoxLayout()
+        rx_row.addWidget(QLabel("Prescription (100%)"))
+        self._d_rx = QDoubleSpinBox()
+        self._d_rx.setRange(0.01, 1e6)
+        self._d_rx.setDecimals(2)
+        self._d_rx.setSuffix(" Gy")
+        self._d_rx.setValue(float(self._params.get("D_rx", PRESCRIPTION_PARAMS["D_rx"])))
+        self._d_rx.valueChanged.connect(self._on_rx_changed)
+        rx_row.addWidget(self._d_rx)
+        self._rx_cgy = QLabel()
+        rx_row.addWidget(self._rx_cgy)
+        rx_row.addStretch(1)
+        voi_l.addLayout(rx_row)
 
-        for key in self._oar_keys:
-            box = QGroupBox(key.capitalize())
-            form = QFormLayout(box)
-            vals = params["oar_params"][key]
-            self._add(form, f"{key}.D_tol", "D_tol  tolerance (Gy)", vals["D_tol"])
-            self._add(form, f"{key}.w_O", "w_O  overdose weight", vals["w_O"])
-            layout.addWidget(box)
+        self._table = QTableWidget(0, 7)
+        self._table.setHorizontalHeaderLabels(self._HEADERS)
+        self._table.verticalHeader().setVisible(False)
+        self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self._table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self._table.setEditTriggers(
+            QAbstractItemView.DoubleClicked | QAbstractItemView.SelectedClicked
+            | QAbstractItemView.EditKeyPressed
+        )
+        hdr = self._table.horizontalHeader()
+        hdr.setSectionResizeMode(self._COL_ON, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(self._COL_NAME, QHeaderView.Stretch)
+        for col in (self._COL_TYPE, self._COL_CLASS):
+            hdr.setSectionResizeMode(col, QHeaderView.Interactive)
+        for col in (self._COL_PCT, self._COL_CGY, self._COL_W):
+            hdr.setSectionResizeMode(col, QHeaderView.Stretch)
+        hdr.setStretchLastSection(False)
+        self._table.itemChanged.connect(self._on_item_changed)
+        self._table.itemSelectionChanged.connect(self._on_row_selected)
+        voi_l.addWidget(self._table, stretch=1)
 
-        box = QGroupBox("Default OAR (unmatched names)")
-        form = QFormLayout(box)
-        self._add(form, "D_tol", "D_tol  tolerance (Gy)", params["D_tol"])
-        self._add(form, "w_O", "w_O  overdose weight", params["w_O"])
-        layout.addWidget(box)
+        self._detail = QWidget()
+        d = QHBoxLayout(self._detail)
+        d.setContentsMargins(0, 0, 0, 0)
+        self._det_name = QLabel("")
+        self._det_name.setMinimumWidth(140)
+        self._det_type = QLabel("")
+        self._det_class = QLabel("")
+        self._det_pct = QDoubleSpinBox()
+        self._det_cgy = QDoubleSpinBox()
+        self._det_w = QDoubleSpinBox()
+        for spin, lo, hi, dec in (
+            (self._det_pct, 0.0, 1e6, 2),
+            (self._det_cgy, 0.0, 1e6, 2),
+            (self._det_w, 0.0, 1e6, 3),
+        ):
+            spin.setRange(lo, hi)
+            spin.setDecimals(dec)
+        self._det_pct.valueChanged.connect(lambda v: self._apply_detail("pct", v))
+        self._det_cgy.valueChanged.connect(lambda v: self._apply_detail("cgy", v))
+        self._det_w.valueChanged.connect(lambda v: self._apply_detail("w", v))
+        d.addWidget(self._det_name)
+        d.addWidget(self._det_type)
+        d.addWidget(self._det_class)
+        d.addWidget(self._det_pct)
+        d.addWidget(self._det_cgy)
+        d.addWidget(self._det_w)
+        d.addStretch(1)
+        voi_l.addWidget(self._detail)
+        layout.addWidget(voi, stretch=1)
 
         box = QGroupBox("IPSA")
         form = QFormLayout(box)
@@ -873,10 +925,7 @@ class OptimizationSettingsDialog(QDialog):
         self._iters.setRange(1, 1_000_000)
         self._iters.setValue(int(ipsa_params.get("n_iterations", IPSA_DEFAULTS["n_iterations"])))
         form.addRow("Max iterations", self._iters)
-        self._seed = QSpinBox()
-        self._seed.setRange(0, 2**31 - 1)
-        self._seed.setValue(int(ipsa_params.get("seed", IPSA_DEFAULTS["seed"])))
-        form.addRow("Random seed", self._seed)
+        self._seed_value = int(ipsa_params.get("seed", IPSA_DEFAULTS["seed"]))
         layout.addWidget(box)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -887,28 +936,275 @@ class OptimizationSettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-    def _add(self, form, key, label, value):
-        spin = QDoubleSpinBox()
-        spin.setRange(0.0, 1e6)
-        spin.setDecimals(2)
-        spin.setSingleStep(0.5)
-        spin.setValue(float(value))
-        form.addRow(label, spin)
-        self._spins[key] = spin
+        self._refresh_rx_label()
+        self._rebuild_table()
+
+    def _rx_gy(self):
+        return max(float(self._d_rx.value()), 1e-9)
+
+    def _refresh_rx_label(self):
+        self._rx_cgy.setText(f"= {self._rx_gy() * 100.0:.2f} cGy")
+
+    def _pct_of(self, gy):
+        return 100.0 * float(gy) / self._rx_gy()
+
+    def _gy_from_pct(self, pct):
+        return float(pct) / 100.0 * self._rx_gy()
+
+    def _default_rows(self, params=None):
+        p = copy_prescription_params(params)
+        structures = list((self._case or {}).get("structures") or [])
+        if not structures:
+            structures = [
+                {"name": "CTV", "classification": "CTV", "interpreted_type": "CTV"},
+                {"name": "Urethra", "classification": "OAR", "interpreted_type": "ORGAN"},
+                {"name": "Bladder", "classification": "OAR", "interpreted_type": "ORGAN"},
+                {"name": "Rectum", "classification": "OAR", "interpreted_type": "ORGAN"},
+            ]
+        saved = {(r["structure"], r["kind"]): r for r in p.get("voi_settings") or []}
+        enabled_map = p.get("voi_enabled") or {}
+        rows = []
+        for s in structures:
+            cls = s.get("classification") or "OTHER"
+            if cls not in ("CTV", "PTV", "OAR"):
+                continue
+            itype = (s.get("interpreted_type") or "").strip() or cls
+            name = s["name"]
+            if cls in ("CTV", "PTV"):
+                if cls == "PTV":
+                    low_gy, high_gy, w_l, w_h = 1.05 * p.get("D_rx", 15.0), 1.50 * p.get("D_rx", 15.0), 100.0, 4.0
+                    on_default = False   # keep current cost (CTV+OAR only) unless the user enables PTV
+                else:
+                    tp = None
+                    for key, vals in p.get("target_params", {}).items():
+                        if key in name.lower():
+                            tp = vals
+                            break
+                    low_gy = (tp or p)["D_p"] if tp else p["D_p"]
+                    high_gy = (tp or p)["D_max"] if tp else p["D_max"]
+                    w_l = (tp or p)["w_L"] if tp else p["w_L"]
+                    w_h = (tp or p)["w_H"] if tp else p["w_H"]
+                    on_default = True
+                for kind, label, gy, w in (
+                    ("low", f"{name}-Low", low_gy, w_l),
+                    ("high", f"{name}-High", high_gy, w_h),
+                ):
+                    prev = saved.get((name, kind))
+                    on = prev["enabled"] if prev else enabled_map.get(name, on_default)
+                    if prev:
+                        gy, w = prev["dose_gy"], prev["w"]
+                    rows.append({
+                        "structure": name, "kind": kind, "label": prev["label"] if prev else label,
+                        "type": cls, "class": itype, "dose_gy": float(gy), "w": float(w),
+                        "enabled": bool(on),
+                    })
+            else:
+                prev = saved.get((name, "oar"))
+                d_tol, w_o = _oar_limits(name, p)
+                on = prev["enabled"] if prev else enabled_map.get(name, True)
+                if prev:
+                    d_tol, w_o = prev["dose_gy"], prev["w"]
+                rows.append({
+                    "structure": name, "kind": "oar", "label": name,
+                    "type": "OAR", "class": itype if itype not in ("ORGAN", "OAR") else name,
+                    "dose_gy": float(d_tol), "w": float(w_o), "enabled": bool(on),
+                })
+        return rows
+
+    def _set_row_items(self, row, data):
+        self._updating = True
+        chk = QCheckBox()
+        chk.setChecked(bool(data["enabled"]))
+        chk.stateChanged.connect(lambda _=None, r=row: self._on_check(r))
+        wrap = QWidget()
+        hl = QHBoxLayout(wrap)
+        hl.setContentsMargins(4, 0, 0, 0)
+        hl.addWidget(chk)
+        hl.addStretch(1)
+        self._table.setCellWidget(row, self._COL_ON, wrap)
+        values = [
+            (self._COL_NAME, data["label"], False),
+            (self._COL_TYPE, data["type"], False),
+            (self._COL_CLASS, data["class"], False),
+            (self._COL_PCT, f"{self._pct_of(data['dose_gy']):.2f}", True),
+            (self._COL_CGY, f"{data['dose_gy'] * 100.0:.2f}", True),
+            (self._COL_W, f"{data['w']:.3f}", True),
+        ]
+        for col, text, editable in values:
+            item = QTableWidgetItem(text)
+            item.setTextAlignment(Qt.AlignCenter if col >= self._COL_PCT else Qt.AlignLeft | Qt.AlignVCenter)
+            if not editable:
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+            if col == self._COL_NAME:
+                item.setData(Qt.UserRole, dict(data))
+            self._table.setItem(row, col, item)
+        self._updating = False
+
+    def _row_data(self, row):
+        item = self._table.item(row, self._COL_NAME)
+        return dict(item.data(Qt.UserRole) or {}) if item else {}
+
+    def _store_row(self, row, data):
+        item = self._table.item(row, self._COL_NAME)
+        if item is not None:
+            item.setData(Qt.UserRole, dict(data))
+
+    def _rebuild_table(self, params=None):
+        rows = self._default_rows(params if params is not None else self._params)
+        self._table.setRowCount(len(rows))
+        for i, data in enumerate(rows):
+            self._set_row_items(i, data)
+        extra = 28
+        for col in (self._COL_TYPE, self._COL_CLASS):
+            self._table.resizeColumnToContents(col)
+            self._table.setColumnWidth(col, self._table.columnWidth(col) + extra)
+        if rows:
+            self._table.selectRow(0)
+
+    def _on_check(self, row):
+        wrap = self._table.cellWidget(row, self._COL_ON)
+        chk = wrap.findChild(QCheckBox) if wrap else None
+        data = self._row_data(row)
+        data["enabled"] = bool(chk.isChecked()) if chk else True
+        self._store_row(row, data)
+
+    def _on_item_changed(self, item):
+        if self._updating or item is None:
+            return
+        row, col = item.row(), item.column()
+        data = self._row_data(row)
+        if not data:
+            return
+        try:
+            value = float(item.text())
+        except (TypeError, ValueError):
+            self._set_row_items(row, data)
+            return
+        if col == self._COL_PCT:
+            data["dose_gy"] = self._gy_from_pct(value)
+        elif col == self._COL_CGY:
+            data["dose_gy"] = value / 100.0
+        elif col == self._COL_W:
+            data["w"] = value
+        self._store_row(row, data)
+        self._updating = True
+        self._table.item(row, self._COL_PCT).setText(f"{self._pct_of(data['dose_gy']):.2f}")
+        self._table.item(row, self._COL_CGY).setText(f"{data['dose_gy'] * 100.0:.2f}")
+        self._table.item(row, self._COL_W).setText(f"{data['w']:.3f}")
+        self._updating = False
+        self._on_row_selected()
+
+    def _on_rx_changed(self, *_):
+        self._refresh_rx_label()
+        self._updating = True
+        for row in range(self._table.rowCount()):
+            data = self._row_data(row)
+            if not data:
+                continue
+            self._table.item(row, self._COL_PCT).setText(f"{self._pct_of(data['dose_gy']):.2f}")
+        self._updating = False
+        self._on_row_selected()
+
+    def _on_row_selected(self):
+        rows = self._table.selectionModel().selectedRows() if self._table.selectionModel() else []
+        if not rows:
+            return
+        data = self._row_data(rows[0].row())
+        if not data:
+            return
+        self._updating = True
+        self._det_name.setText(data["label"])
+        self._det_type.setText(data["type"])
+        self._det_class.setText(data["class"])
+        self._det_pct.setValue(self._pct_of(data["dose_gy"]))
+        self._det_cgy.setValue(data["dose_gy"] * 100.0)
+        self._det_w.setValue(data["w"])
+        self._updating = False
+
+    def _apply_detail(self, field, value):
+        if self._updating:
+            return
+        rows = self._table.selectionModel().selectedRows() if self._table.selectionModel() else []
+        if not rows:
+            return
+        row = rows[0].row()
+        data = self._row_data(row)
+        if field == "pct":
+            data["dose_gy"] = self._gy_from_pct(value)
+        elif field == "cgy":
+            data["dose_gy"] = value / 100.0
+        else:
+            data["w"] = value
+        self._store_row(row, data)
+        self._updating = True
+        self._table.item(row, self._COL_PCT).setText(f"{self._pct_of(data['dose_gy']):.2f}")
+        self._table.item(row, self._COL_CGY).setText(f"{data['dose_gy'] * 100.0:.2f}")
+        self._table.item(row, self._COL_W).setText(f"{data['w']:.3f}")
+        if field == "pct":
+            self._det_cgy.setValue(data["dose_gy"] * 100.0)
+        elif field == "cgy":
+            self._det_pct.setValue(self._pct_of(data["dose_gy"]))
+        self._updating = False
+
+    def _collect_rows(self):
+        rows = []
+        for r in range(self._table.rowCount()):
+            data = self._row_data(r)
+            wrap = self._table.cellWidget(r, self._COL_ON)
+            chk = wrap.findChild(QCheckBox) if wrap else None
+            if chk is not None:
+                data["enabled"] = chk.isChecked()
+            rows.append(data)
+        return rows
 
     def params(self):
-        p = copy_prescription_params()
-        for key in ("D_p", "D_max", "w_L", "w_H", "D_tol", "w_O"):
-            p[key] = self._spins[key].value()
-        for key in self._oar_keys:
-            p["oar_params"][key] = {
-                "D_tol": self._spins[f"{key}.D_tol"].value(),
-                "w_O": self._spins[f"{key}.w_O"].value(),
-            }
+        p = copy_prescription_params(self._params)
+        p["D_rx"] = self._rx_gy()
+        rows = self._collect_rows()
+        p["voi_settings"] = [dict(r) for r in rows]
+        enabled = {}
+        target_params = {}
+        oar_params = dict(p.get("oar_params") or {})
+        extra_targets = []
+        first_ctv_low = first_ctv_high = None
+        by_struct = {}
+        for r in rows:
+            by_struct.setdefault(r["structure"], []).append(r)
+        for name, group in by_struct.items():
+            kinds = {g["kind"]: g for g in group}
+            if "oar" in kinds:
+                oar = kinds["oar"]
+                enabled[name] = bool(oar["enabled"])
+                oar_params[name.lower()] = {"D_tol": float(oar["dose_gy"]), "w_O": float(oar["w"])}
+                continue
+            low, high = kinds.get("low"), kinds.get("high")
+            on = bool((low and low["enabled"]) or (high and high["enabled"]))
+            enabled[name] = on
+            D_p = float(low["dose_gy"]) if low else p["D_p"]
+            D_max = float(high["dose_gy"]) if high else p["D_max"]
+            w_L = float(low["w"]) if low and low["enabled"] else 0.0
+            w_H = float(high["w"]) if high and high["enabled"] else 0.0
+            target_params[name.lower()] = {"D_p": D_p, "D_max": D_max, "w_L": w_L, "w_H": w_H}
+            is_ptv = (low or high or {}).get("type") == "PTV"
+            is_ctv = (low or high or {}).get("type") == "CTV"
+            if is_ptv and on:
+                extra_targets.append(name)
+            if is_ctv and first_ctv_low is None and low:
+                first_ctv_low, first_ctv_high = low, high
+        if first_ctv_low is not None:
+            p["D_p"] = float(first_ctv_low["dose_gy"])
+            p["w_L"] = float(first_ctv_low["w"]) if first_ctv_low["enabled"] else 0.0
+        if first_ctv_high is not None:
+            p["D_max"] = float(first_ctv_high["dose_gy"])
+            p["w_H"] = float(first_ctv_high["w"]) if first_ctv_high["enabled"] else 0.0
+        p["target_params"] = target_params
+        p["oar_params"] = oar_params
+        p["voi_enabled"] = enabled
+        p["extra_target_names"] = extra_targets
         return p
 
     def ipsa_params(self):
-        return {"n_iterations": self._iters.value(), "seed": self._seed.value()}
+        return {"n_iterations": self._iters.value(), "seed": int(self._seed_value)}
 
     def _update_margin_enabled(self, *_):
         self._margin.setEnabled(self._ext_radio.isChecked())
@@ -928,19 +1224,15 @@ class OptimizationSettingsDialog(QDialog):
         }
 
     def _on_reset(self):
-        d = copy_prescription_params()
-        for key in ("D_p", "D_max", "w_L", "w_H", "D_tol", "w_O"):
-            self._spins[key].setValue(d[key])
-        for key in self._oar_keys:
-            if key in d["oar_params"]:
-                self._spins[f"{key}.D_tol"].setValue(d["oar_params"][key]["D_tol"])
-                self._spins[f"{key}.w_O"].setValue(d["oar_params"][key]["w_O"])
+        self._params = copy_prescription_params()
+        self._d_rx.setValue(float(self._params["D_rx"]))
         self._iters.setValue(IPSA_DEFAULTS["n_iterations"])
-        self._seed.setValue(IPSA_DEFAULTS["seed"])
+        self._seed_value = int(IPSA_DEFAULTS["seed"])
         self._all_radio.setChecked(True)
         self._margin.setValue(EXTENDED_PTV_MARGIN_MM)
         self._ctv_margin.setValue(EXTENDED_CTV_MARGIN_MM)
         self._update_margin_enabled()
+        self._rebuild_table(self._params)
 
 
 # ----------------------------------------------------------------------
@@ -1263,6 +1555,7 @@ class MainWindow(QMainWindow):
             self._rx_params, self._ipsa_params, self._mesh_params,
             has_ptv=case is not None and case["extended_ptv_mask"] is not None,
             has_ctv=case is not None and case["extended_ctv_mask"] is not None,
+            case=case,
             parent=self,
         )
         if dlg.exec_() == QDialog.Accepted:
