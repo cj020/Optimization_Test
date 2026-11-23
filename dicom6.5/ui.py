@@ -106,6 +106,9 @@ _EXTENDED_CTV_COLOR = "#66ff99"
 _ISODOSE_LEVELS = [(0.5, "#00a0ff"), (1.0, "#00ff00"), (1.5, "#ffff00"), (2.0, "#ff0000")]
 
 _DWELL_CMAP = "jet"
+_DOSE_CMAP = "jet"
+_COLORWASH_ALPHA = 0.50
+_COLORWASH_MIN_FRAC = 0.05   # hide wash below this fraction of D_p so anatomy stays visible
 
 # numpy volume axis (z, y, x) -> index into world (x, y, z) arrays
 _WORLD = {0: 2, 1: 1, 2: 0}
@@ -208,6 +211,7 @@ class ViewerState:
         self.show_candidates = False
         self.show_dwells = True
         self.show_isodose = True
+        self.show_colorwash = True
 
     def coords(self, axis):
         c = self.case
@@ -398,10 +402,23 @@ class SliceView(QFrame):
             legend.append(Line2D([], [], color=_EXTENDED_CTV_COLOR, lw=1.5, ls=":",
                                  label=f"{EXTENDED_CTV_NAME} (+{ext_ctv_margin:g} mm)"))
 
-        if s.show_isodose and s.result is not None:
+        dose2 = None
+        D_p = None
+        if s.result is not None:
             dose = s.result.get("opt_dose_gy_display", s.result["opt_dose_gy"])
             dose2 = self._slice(dose)
             D_p = s.result["rx_params"]["D_p"]
+
+        if s.show_colorwash and dose2 is not None:
+            vmax = max(float(np.max(dose)), float(D_p), 1e-6)
+            thresh = _COLORWASH_MIN_FRAC * float(D_p)
+            wash = np.ma.masked_where(dose2 < thresh, dose2)
+            cmap = cm.get_cmap(_DOSE_CMAP).copy()
+            cmap.set_bad(alpha=0.0)
+            ax.imshow(wash, cmap=cmap, vmin=0.0, vmax=vmax, alpha=_COLORWASH_ALPHA,
+                      origin=self.origin, extent=extent, interpolation="bilinear")
+
+        if s.show_isodose and dose2 is not None:
             for frac, color in _ISODOSE_LEVELS:
                 level = frac * D_p
                 if dose2.max() > level > dose2.min():
@@ -429,15 +446,27 @@ class SliceView(QFrame):
                 ax.scatter(x, y, c=times[sel], cmap=_DWELL_CMAP, vmin=0.0, vmax=t_max,
                            s=18 + 60 * times[sel] / t_max,
                            edgecolors="white", linewidths=0.6, zorder=5)
-            if self.cax is not None:
-                self.cax.set_visible(True)
-                self.cax.clear()
-                cb = self.figure.colorbar(
-                    cm.ScalarMappable(norm=Normalize(0.0, t_max), cmap=_DWELL_CMAP),
-                    cax=self.cax,
-                )
-                cb.set_label("Dwell time (s)", color="white", fontsize=8)
-                cb.ax.tick_params(colors="white", labelsize=7)
+
+        if self.cax is not None and s.result is not None and s.show_colorwash and dose2 is not None:
+            vmax = max(float(np.max(dose)), float(D_p), 1e-6)
+            self.cax.set_visible(True)
+            self.cax.clear()
+            cb = self.figure.colorbar(
+                cm.ScalarMappable(norm=Normalize(0.0, vmax), cmap=_DOSE_CMAP),
+                cax=self.cax,
+            )
+            cb.set_label("Dose (Gy)", color="white", fontsize=8)
+            cb.ax.tick_params(colors="white", labelsize=7)
+        elif self.cax is not None and s.show_dwells and len(pos):
+            t_max = float(times.max()) if times.max() > 0 else 1.0
+            self.cax.set_visible(True)
+            self.cax.clear()
+            cb = self.figure.colorbar(
+                cm.ScalarMappable(norm=Normalize(0.0, t_max), cmap=_DWELL_CMAP),
+                cax=self.cax,
+            )
+            cb.set_label("Dwell time (s)", color="white", fontsize=8)
+            cb.ax.tick_params(colors="white", labelsize=7)
 
         if s.selected is not None and self._in_slice(pos[[s.selected]])[0]:
             x, y = self._plot_xy(pos[[s.selected]])
@@ -1012,6 +1041,7 @@ class MainWindow(QMainWindow):
             ("show_extended_ctv", f"Show Extended &CTV"),
             ("show_candidates", "Show &Candidate Mesh"),
             ("show_dwells", "Show &Dwells"),
+            ("show_colorwash", "Show Dose Color &Wash"),
             ("show_isodose", "Show &Isodose Lines"),
         ):
             act = QAction(text, self)
